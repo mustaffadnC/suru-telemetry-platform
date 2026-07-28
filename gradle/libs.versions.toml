@@ -1,0 +1,31 @@
+# Central version catalogue. Every new dependency is declared here;
+# module build files never spell out a bare version.
+
+[versions]
+java = "25"
+
+# test
+junit = "6.0.3"
+assertj = "3.27.3"
+# 1.4.1 is the first release whose bundled ASM understands Java 25 class files
+# (major version 69). On 1.4.0 the importer silently skips every class and each
+# rule fails with "failed to check any classes" — which reads like a rule
+# violation but is really a parser that read nothing.
+archunit = "1.4.2"
+
+# Added in phase 1: jqwik (JUnit Platform 6 compatibility to be verified — jqwik 1.9
+# targets Platform 1.x; if incompatible, a property-based approach is built on
+# JUnit 6's own facilities).
+# Phase 2+: netty, kafka, spring-boot, testcontainers, jmh.
+
+[libraries]
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+# The core ArchUnit API is used rather than the archunit-junit5 engine: the engine is
+# tightly coupled to the JUnit Platform version, the core API is not.
+archunit = { module = "com.tngtech.archunit:archunit", version.ref = "archunit" }
+
+[bundles]
+testing = ["junit-jupiter", "assertj-core", "archunit"]

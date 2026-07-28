@@ -1,0 +1,142 @@
+# SÜRÜ local development infrastructure.
+#
+#   docker compose -f deploy/docker-compose.yml up -d
+#
+# To bring up a subset, name the services, e.g. the data layer only:
+#   docker compose -f deploy/docker-compose.yml up -d timescaledb kafka redis
+#
+# NOTE (phase 0): image tags are validated on the first `docker compose pull`;
+# they are pinned to digests (sha256) in phase 6 for reproducibility.
+
+name: suru
+
+services:
+  # --- Data layer -----------------------------------------------------------
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: suru-timescaledb
+    environment:
+      POSTGRES_DB: suru
+      POSTGRES_USER: suru
+      POSTGRES_PASSWORD: suru_dev_only
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=timescaledb
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - work_mem=32MB
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suru -d suru"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    container_name: suru-redis
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # --- Messaging (KRaft — no ZooKeeper) -------------------------------------
+  kafka:
+    image: apache/kafka:latest
+    container_name: suru-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics are created explicitly with their partition counts — never implicitly.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 24
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  # --- Identity -------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: suru-keycloak
+    command: ["start-dev", "--http-port=8081"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin_dev_only
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8081 && echo ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # --- Object store (cold tier / Parquet archive) ---------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: suru-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: suru
+      MINIO_ROOT_PASSWORD: suru_dev_only
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # --- Observability (Grafana + Loki + Tempo + Mimir in one image) ----------
+  observability:
+    image: grafana/otel-lgtm:latest
+    container_name: suru-lgtm
+    ports:
+      - "3000:3000" # Grafana UI
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    volumes:
+      - lgtm-data:/data
+
+volumes:
+  timescale-data:
+  kafka-data:
+  minio-data:
+  lgtm-data:
