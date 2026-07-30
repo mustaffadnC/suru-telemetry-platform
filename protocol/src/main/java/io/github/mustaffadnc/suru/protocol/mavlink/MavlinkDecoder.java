@@ -272,10 +272,16 @@ public final class MavlinkDecoder {
         return CONSUMED;
     }
 
-    /** Checksum region runs from {@code from} for {@code length} bytes, then CRC_EXTRA. */
+    /**
+     * Checksum region runs from {@code from} for {@code length} bytes, then CRC_EXTRA.
+     *
+     * <p>Uses the table-driven CRC. Measured, not assumed: checksumming turned out to be
+     * essentially the whole cost of decoding, and the table is 3–5× faster than the bitwise loop at
+     * these frame sizes. See docs/benchmarks.md.
+     */
     private boolean checksumMatches(int from, int length, int crcExtra) {
-        int crc = Crc16.mcrf4xx(Crc16.INIT, buffer, from, length);
-        crc = Crc16.mcrf4xxUpdate(crc, (byte) crcExtra);
+        int crc = Crc16.mcrf4xxFast(Crc16.INIT, buffer, from, length);
+        crc = Crc16.mcrf4xxFastUpdate(crc, (byte) crcExtra);
         int stored = (buffer[from + length] & 0xFF) | ((buffer[from + length + 1] & 0xFF) << 8);
         return crc == stored;
     }

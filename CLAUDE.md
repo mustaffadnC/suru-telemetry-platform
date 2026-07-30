@@ -42,6 +42,10 @@ docker compose -f deploy/docker-compose.yml up -d  # infrastructure
 Quoting breaks when passing commands from PowerShell into WSL — write a script file and run it
 with `wsl -d Ubuntu -e bash <script>`.
 
+**Do not write long-running output to `/tmp` in WSL.** The distro shuts itself down once its last
+process exits, and systemd clears `/tmp` on the next boot — a background benchmark's log vanished
+between finishing and being read. Write under the repo's `build/` directory, or capture stdout.
+
 ## Architecture rules
 
 - **The `protocol` module is dependency-free.** Netty, Kafka and Spring may not leak into it — the

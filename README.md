@@ -31,7 +31,15 @@ That means every design decision here is answerable from both ends of the link:
 
 Nothing above is claimed as working until its phase is marked done and the numbers are in [`docs/benchmarks.md`](docs/benchmarks.md).
 
-**Phase 0, verified:** `./gradlew check` green — 11 tests, 8 covering the two CRC variants and 3 enforcing architecture. `docker compose up -d` brings up all six services healthy, checked functionally rather than by container state: TimescaleDB 2.29.0 extension created and queried, a 3-partition Kafka topic created/described/deleted on a KRaft broker, Redis `PONG`, Keycloak/MinIO/Grafana all HTTP 200, OTLP port open. Idle footprint 2.2 GB.
+**Phase 0, verified:** `docker compose up -d` brings up all six services healthy, checked functionally rather than by container state: TimescaleDB 2.29.0 extension created and queried, a 3-partition Kafka topic created/described/deleted on a KRaft broker, Redis `PONG`, Keycloak/MinIO/Grafana all HTTP 200, OTLP port open. Idle footprint 2.2 GB.
+
+**Phase 1, verified:** 34 tests green. The 36 KB recorded SITL stream decodes to **1058 frames with zero checksum errors and zero unknown messages**, after resyncing past 119 bytes of boot banner — reproducing the reference decoder's output exactly, under every input chunking from one byte upward. Decode throughput **568 MB/s** (16.6 M frames/s); table-driven CRC made the whole decoder 2.9–3.1× faster. Numbers and method in [`docs/benchmarks.md`](docs/benchmarks.md); protocol details and the reasoning behind resync in [`docs/protocol.md`](docs/protocol.md).
+
+Three findings from phase 1 are written up rather than quietly fixed, because each one was a belief that measurement or testing overturned:
+
+- **The convenience API lost data.** `endOfStream()` had a no-arg overload that discarded recovered frames. A frame held back by a corrupted length field surfaces only there — the overload lost one in its first use, ten minutes after being written, and was removed.
+- **A false `HK\x01` header does not merely desynchronise, it parses.** The following frame's own magic supplies a plausible type and length, so a frame-shaped span is read and only the checksum rejects it. This is the concrete reason recovery advances one byte instead of skipping the claimed length.
+- **The zero-copy design looked worthless until the CRC got faster.** Copying every payload cost 1–4 % while checksumming dominated, and 10–17 % once it did not. Judged on the first measurement alone, the flyweight would have been reasonable to delete.
 
 ## Architecture
 
