@@ -54,6 +54,20 @@ with `wsl -d Ubuntu -e bash <script>`.
 - Modules are added to `settings.gradle.kts` **when their phase starts**; no empty shell modules.
 - Versions live only in `gradle/libs.versions.toml`; module files never spell out a bare version.
 
+## Protocol module notes
+
+- **Decoder API: `endOfStream(handler)` takes a handler and there is no no-arg overload.** A frame
+  held back mid-stream — because a corrupted length field made the decoder wait for bytes that never
+  came — is recovered only there. The convenience overload existed for about ten minutes and lost
+  data in its first use.
+- **Oracles live in `tools/`, goldens in `src/test/resources/`.** `hk-reference.py` and
+  `mavlink-reference.py` regenerate the `.expected.txt` files; the Java tests compare against them.
+  Both have a `--selftest`. Regenerate a golden only when the *format* changes deliberately — never
+  to make a failing test pass.
+- **`ArduPilotMegaDialect.java` is generated**, by `tools/generate-mavlink-dialect.py` from the
+  MAVLink C headers vendored in kerkenez-gcs. Do not hand-edit.
+- Full protocol reference and the reasoning behind resync: `docs/protocol.md`.
+
 ## Known traps
 
 - **MAVLink is CRC-16/MCRF4XX, NOT X-25.** The names `crc_accumulate` / `X25_INIT_CRC` in the
@@ -83,8 +97,9 @@ CI is green" discipline). Details in the plan file.
   ADR-0001/0002, `Crc16` + tests ✅ *(verified 29 Jul 2026: 11/11 tests green; all six compose
   services healthy and functionally checked — TimescaleDB 2.29.0, Kafka KRaft topic lifecycle,
   Redis, Keycloak/MinIO/Grafana HTTP 200, OTLP 4317 open)*
-- **Phase 1** — protocol core: MAVLink v2 + HK framing, resync, sequence-loss tracking, differential
-  test against the Python reference, golden fixture (`sitl_stream.bin`), JMH
+- **Phase 1** — protocol core ✅ *(MAVLink v1/v2 + HK framing, resync, per-endpoint sequence loss,
+  differential tests against two independent Python oracles, real 36 KB SITL recording decoding to
+  1058 frames with 0 checksum errors, table-driven CRC + JMH)*
 - **Phase 2** — ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer
 - **Phase 3** — TimescaleDB schema + query API, QuestDB comparison → ADR-0004
 - **Phase 4** — Kafka Streams windowing, rules engine (debounce/hysteresis), alert state machine

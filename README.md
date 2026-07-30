@@ -16,12 +16,12 @@ That means every design decision here is answerable from both ends of the link:
 - **Real telemetry, not a fake generator.** Load comes from ArduPilot SITL instances flying real missions, and from recorded byte streams captured off an actual link.
 - **Verified against an independent implementation.** The Java decoder is differential-tested against the reference Python decoder written for the firmware.
 
-## Status — Phase 0 (scaffolding) ✅
+## Status — Phase 1 (protocol core) ✅
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Build infrastructure, convention plugins, compose stack, CI, ADRs, CRC core | ✅ done |
-| 1 | Protocol core: MAVLink v2 + HK framing, resync, sequence-loss, differential test, JMH | ⬜ |
+| 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
 | 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ⬜ |
 | 3 | TimescaleDB schema, continuous aggregates, query API | ⬜ |
 | 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ⬜ |

@@ -122,4 +122,93 @@ public final class Crc16 {
         }
         return c & MASK;
     }
+
+    // ---------------------------------------------------------------- table-driven --
+
+    // One byte per step instead of eight bit-tests. The tables are 512 bytes each and are
+    // built at class-init from the same polynomials the bitwise code uses, so they cannot
+    // drift from it; Crc16Test proves the two agree over the whole input space.
+
+    private static final int[] TABLE_MSB = new int[256];
+    private static final int[] TABLE_LSB = new int[256];
+
+    static {
+        for (int i = 0; i < 256; i++) {
+            int msb = i << 8;
+            int lsb = i;
+            for (int bit = 0; bit < 8; bit++) {
+                msb = ((msb & 0x8000) != 0) ? (((msb << 1) ^ POLY_MSB)) : (msb << 1);
+                lsb = ((lsb & 1) != 0) ? ((lsb >>> 1) ^ POLY_LSB) : (lsb >>> 1);
+            }
+            TABLE_MSB[i] = msb & MASK;
+            TABLE_LSB[i] = lsb & MASK;
+        }
+    }
+
+    /**
+     * CRC-16/CCITT-FALSE, table-driven. Equivalent to {@link #ccittFalse(int, byte[], int, int)}.
+     *
+     * @param crc running value to continue from
+     * @param data source array
+     * @param offset start index
+     * @param length number of bytes to process
+     * @return updated running value
+     */
+    public static int ccittFalseFast(int crc, byte[] data, int offset, int length) {
+        int c = crc & MASK;
+        int end = offset + length;
+        for (int i = offset; i < end; i++) {
+            c = ((c << 8) & MASK) ^ TABLE_MSB[((c >>> 8) ^ data[i]) & 0xFF];
+        }
+        return c;
+    }
+
+    /**
+     * CRC-16/CCITT-FALSE over a whole array, table-driven.
+     *
+     * @param data bytes to checksum
+     * @return checksum in the range {@code 0..0xFFFF}
+     */
+    public static int ccittFalseFast(byte[] data) {
+        return ccittFalseFast(INIT, data, 0, data.length);
+    }
+
+    /**
+     * CRC-16/MCRF4XX, table-driven. Equivalent to {@link #mcrf4xx(int, byte[], int, int)}.
+     *
+     * @param crc running value to continue from
+     * @param data source array
+     * @param offset start index
+     * @param length number of bytes to process
+     * @return updated running value
+     */
+    public static int mcrf4xxFast(int crc, byte[] data, int offset, int length) {
+        int c = crc & MASK;
+        int end = offset + length;
+        for (int i = offset; i < end; i++) {
+            c = (c >>> 8) ^ TABLE_LSB[(c ^ data[i]) & 0xFF];
+        }
+        return c;
+    }
+
+    /**
+     * CRC-16/MCRF4XX over a whole array, table-driven.
+     *
+     * @param data bytes to checksum
+     * @return checksum in the range {@code 0..0xFFFF}
+     */
+    public static int mcrf4xxFast(byte[] data) {
+        return mcrf4xxFast(INIT, data, 0, data.length);
+    }
+
+    /**
+     * CRC-16/MCRF4XX, table-driven, single byte.
+     *
+     * @param crc running value to continue from
+     * @param b byte to process
+     * @return updated running value
+     */
+    public static int mcrf4xxFastUpdate(int crc, byte b) {
+        return (crc >>> 8) ^ TABLE_LSB[(crc ^ b) & 0xFF];
+    }
 }

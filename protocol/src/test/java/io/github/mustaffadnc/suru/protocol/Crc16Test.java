@@ -88,6 +88,46 @@ class Crc16Test {
     }
 
     @Test
+    @DisplayName("Table-driven and bitwise implementations agree on every single byte value")
+    void tableAgreesWithBitwiseOnAllBytes() {
+        // The table is the optimisation; the bitwise loop is the definition. Checking every
+        // one of the 256 possible bytes from every one of 256 sampled seeds covers the whole
+        // state transition an incremental CRC can make.
+        for (int seed = 0; seed < 0x10000; seed += 257) {
+            for (int b = 0; b < 256; b++) {
+                byte value = (byte) b;
+                assertThat(Crc16.mcrf4xxFast(seed, new byte[] {value}, 0, 1))
+                        .as("MCRF4XX seed=0x%04X byte=0x%02X", seed, b)
+                        .isEqualTo(Crc16.mcrf4xx(seed, new byte[] {value}, 0, 1));
+                assertThat(Crc16.ccittFalseFast(seed, new byte[] {value}, 0, 1))
+                        .as("CCITT-FALSE seed=0x%04X byte=0x%02X", seed, b)
+                        .isEqualTo(Crc16.ccittFalse(seed, new byte[] {value}, 0, 1));
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Table-driven implementations produce the catalogue check values too")
+    void tableProducesCheckValues() {
+        assertThat(Crc16.ccittFalseFast(CHECK_INPUT)).isEqualTo(0x29B1);
+        assertThat(Crc16.mcrf4xxFast(CHECK_INPUT)).isEqualTo(0x6F91);
+    }
+
+    @Test
+    @DisplayName("Table-driven and bitwise agree on random buffers of every length")
+    void tableAgreesWithBitwiseOnRandomBuffers() {
+        RandomGenerator rng = RandomGenerator.of("L64X128MixRandom");
+        for (int length = 0; length <= 300; length++) {
+            byte[] data = new byte[length];
+            rng.nextBytes(data);
+            assertThat(Crc16.mcrf4xxFast(data)).as("MCRF4XX len=%d", length).isEqualTo(Crc16.mcrf4xx(data));
+            assertThat(Crc16.ccittFalseFast(data))
+                    .as("CCITT-FALSE len=%d", length)
+                    .isEqualTo(Crc16.ccittFalse(data));
+        }
+    }
+
+    @Test
     @DisplayName("Any single-bit corruption changes the checksum")
     void singleBitFlipChangesChecksum() {
         RandomGenerator rng = RandomGenerator.getDefault();

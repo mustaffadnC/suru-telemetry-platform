@@ -1,3 +1,10 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
 rootProject.name = "suru"
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
@@ -15,5 +22,6 @@ dependencyResolutionManagement {
 //   Phase 2 → ingest-gateway
 //   Phase 3 → control-plane
 //   Phase 4 → stream-processor
-//   Phase 6 → archiver, benchmarks
+//   Phase 6 → archiver
 include("protocol")
+include("benchmarks")
