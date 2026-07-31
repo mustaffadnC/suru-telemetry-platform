@@ -13,10 +13,13 @@ assertj = "3.27.3"
 # violation but is really a parser that read nothing.
 archunit = "1.4.2"
 
-# Added in phase 1: jqwik (JUnit Platform 6 compatibility to be verified — jqwik 1.9
-# targets Platform 1.x; if incompatible, a property-based approach is built on
-# JUnit 6's own facilities).
-# Phase 2+: netty, kafka, spring-boot, testcontainers, jmh.
+# jqwik was considered for property-based testing and not adopted: it targets JUnit
+# Platform 1.x and this project is on Platform 6. The properties it would have covered
+# — a parser that never throws on arbitrary input, always resyncs, and agrees with
+# itself under every input chunking — are expressed with JUnit and RandomGenerator
+# instead, in HkDecoderTest and MavlinkDecoderTest. Revisit if a jqwik release targets
+# Platform 6.
+# Phase 2+: netty, kafka, spring-boot, testcontainers.
 
 [libraries]
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
