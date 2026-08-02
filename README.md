@@ -24,7 +24,7 @@ That means every design decision here is answerable from both ends of the link:
 |---|---|---|
 | 0 | Build infrastructure, convention plugins, compose stack, CI, ADRs, CRC core | ✅ done |
 | 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
-| 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ⬜ |
+| 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | 🚧 TCP + admission control + Kafka done; UDP, dedup and fleet load test remain |
 | 3 | TimescaleDB schema, continuous aggregates, query API | ⬜ |
 | 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ⬜ |
 | 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
@@ -36,6 +36,10 @@ Nothing above is claimed as working until its phase is marked done and the numbe
 **Phase 0, verified:** `docker compose up -d` brings up all six services healthy, checked functionally rather than by container state: TimescaleDB 2.29.0 extension created and queried, a 3-partition Kafka topic created/described/deleted on a KRaft broker, Redis `PONG`, Keycloak/MinIO/Grafana all HTTP 200, OTLP port open. Idle footprint 2.2 GB.
 
 **Phase 1, verified:** 34 tests green. The 36 KB recorded SITL stream decodes to **1058 frames with zero checksum errors and zero unknown messages**, after resyncing past 119 bytes of boot banner — reproducing the reference decoder's output exactly, under every input chunking from one byte upward. Decode throughput **568 MB/s** (16.6 M frames/s); table-driven CRC made the whole decoder 2.9–3.1× faster. Numbers and method in [`docs/benchmarks.md`](docs/benchmarks.md); protocol details and the reasoning behind resync in [`docs/protocol.md`](docs/protocol.md).
+
+**Phase 2, so far:** the gateway takes MAVLink off a TCP socket, attributes it to a tenant and device, and publishes to Kafka keyed by device — 52 tests green, including two against a real broker in a container. Under load it applies the lossless remedy first: above 60 % pressure it stops reading and lets TCP's own flow control slow the sender, and only above that does it shed, bulk diagnostics first and heartbeats never. Reasoning in [ADR-0003](docs/adr/ADR-0003-backpressure-and-shedding.md).
+
+> The shedding thresholds were wrong in the first draft — bulk was discarded at 50 % while reads paused at 80 %, throwing data away while a lossless option sat untried. Caught while writing the tests; a test now pins the invariant that a pressure band must exist where the gateway has stopped reading and is still losing nothing.
 
 Three findings from phase 1 are written up rather than quietly fixed, because each one was a belief that measurement or testing overturned:
 

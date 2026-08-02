@@ -158,6 +158,24 @@ which offset.
 Regenerate a golden only when the *format* changes deliberately — **never to make a failing test
 pass.**
 
+### Ingest gateway (phase 2)
+
+- **Pausing precedes shedding, always.** Every shed threshold sits above the read-pause watermark
+  because pausing a TCP read loses nothing and shedding always loses something. Pinned by
+  `AdmissionControllerTest.pausingPrecedesShedding`. Getting this backwards is easy — the first
+  draft did — and the symptom is data discarded while a lossless remedy was untried.
+- **`shedCritical` must always be zero.** It is a separate counter so a non-zero value reads as a
+  bug, not as congestion.
+- **Pressure is in-flight publications, not queue depth.** `TelemetryPublisher`'s future must
+  complete on broker acknowledgement, not on hand-off — a publisher that completes early reports no
+  pressure however badly Kafka is struggling.
+- **Kafka records are keyed by `tenant/device`** so one device stays on one partition. Downstream
+  sequence-gap detection assumes it; round-robin partitioning would look exactly like packet loss.
+- Payload goes to Kafka **unwrapped**, metadata in headers — no schema at this layer to drift from
+  the protocol module.
+- The read gate is re-checked between read batches, so capacity must exceed frames-per-batch or the
+  gateway sheds where pausing should have sufficed.
+
 ## Invariants
 
 - **`protocol` has no runtime dependencies.** Netty, Kafka and Spring may not leak in; the rule is
@@ -205,7 +223,11 @@ table / screenshot) — the repo stays presentable at any moment.
   differential tests against two Python oracles, table-driven CRC + JMH. The real 36 KB SITL
   recording decodes to 1058 frames, 0 checksum errors, 0 unknown messages, 119 bytes of boot banner
   resynced; 568 MB/s.
-- **Phase 2** — ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer
+- **Phase 2 🚧** — ingest gateway. Done: Netty TCP server, admission control (read-pause then
+  priority shedding), tenant/device attribution, Kafka publisher (idempotent, device-keyed),
+  ADR-0003, Testcontainers integration tests. Remaining: **UDP ingest, dedup, Micrometer/Prometheus
+  wiring, HK ingest path, and the SITL-fleet load measurement that is the phase's acceptance
+  criterion.**
 - **Phase 3** — TimescaleDB schema + query API, QuestDB comparison → ADR-0004
 - **Phase 4** — Kafka Streams windowing, rules engine (debounce/hysteresis), alert state machine
 - **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log
