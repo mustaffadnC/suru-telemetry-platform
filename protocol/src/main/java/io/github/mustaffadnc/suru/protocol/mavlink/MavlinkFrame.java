@@ -164,6 +164,103 @@ public final class MavlinkFrame {
     }
 
     /**
+     * Reads one payload byte, treating anything past the end as zero.
+     *
+     * <p><b>Out of range is not an error here.</b> A MAVLink v2 sender may drop trailing zero bytes
+     * from a payload, so a frame's declared length is routinely shorter than the message's defined
+     * length and the missing bytes are implicitly zero. Field accessors must honour that or every
+     * message whose tail happens to be zero fails to decode.
+     */
+    private int byteOrZero(int index) {
+        return index < 0 || index >= payloadLength ? 0 : buffer[payloadOffset + index] & 0xFF;
+    }
+
+    /**
+     * Reads an unsigned 8-bit field.
+     *
+     * @param index payload offset
+     * @return {@code 0..255}, or {@code 0} past the truncated tail
+     */
+    public int u8(int index) {
+        return byteOrZero(index);
+    }
+
+    /**
+     * Reads a signed 8-bit field.
+     *
+     * @param index payload offset
+     * @return the value, or {@code 0} past the truncated tail
+     */
+    public int i8(int index) {
+        return (byte) byteOrZero(index);
+    }
+
+    /**
+     * Reads an unsigned little-endian 16-bit field.
+     *
+     * @param index payload offset
+     * @return {@code 0..65535}, or {@code 0} past the truncated tail
+     */
+    public int u16(int index) {
+        return byteOrZero(index) | (byteOrZero(index + 1) << 8);
+    }
+
+    /**
+     * Reads a signed little-endian 16-bit field.
+     *
+     * @param index payload offset
+     * @return the value, or {@code 0} past the truncated tail
+     */
+    public int i16(int index) {
+        return (short) u16(index);
+    }
+
+    /**
+     * Reads an unsigned little-endian 32-bit field.
+     *
+     * @param index payload offset
+     * @return {@code 0..4294967295}, or {@code 0} past the truncated tail
+     */
+    public long u32(int index) {
+        return ((long) byteOrZero(index))
+                | ((long) byteOrZero(index + 1) << 8)
+                | ((long) byteOrZero(index + 2) << 16)
+                | ((long) byteOrZero(index + 3) << 24);
+    }
+
+    /**
+     * Reads a signed little-endian 32-bit field.
+     *
+     * @param index payload offset
+     * @return the value, or {@code 0} past the truncated tail
+     */
+    public int i32(int index) {
+        return (int) u32(index);
+    }
+
+    /**
+     * Reads a little-endian 64-bit field.
+     *
+     * @param index payload offset
+     * @return the value, or {@code 0} past the truncated tail
+     */
+    public long i64(int index) {
+        long low = u32(index);
+        long high = u32(index + 4);
+        return (high << 32) | low;
+    }
+
+    /**
+     * Reads a little-endian IEEE-754 single field.
+     *
+     * @param index payload offset
+     * @return the value, or {@code 0.0f} past the truncated tail
+     */
+    public float f32(int index) {
+        return Float.intBitsToFloat((int) u32(index));
+    }
+
+    /**
      * Copies the payload out of the decoder's buffer.
      *
      * @return a fresh array of exactly {@link #payloadLength()} bytes
