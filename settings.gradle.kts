@@ -25,4 +25,5 @@ dependencyResolutionManagement {
 //   Phase 6 → archiver
 include("protocol")
 include("ingest-gateway")
+include("storage")
 include("benchmarks")

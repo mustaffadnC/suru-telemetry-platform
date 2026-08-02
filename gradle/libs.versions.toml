@@ -16,6 +16,11 @@ micrometer = "1.17.0"
 slf4j = "2.0.18"
 logback = "1.5.38"
 
+# phase 3 — storage
+flyway = "13.1.0"
+postgresql = "42.7.13"
+hikari = "7.1.0"
+
 # test
 junit = "6.0.3"
 assertj = "3.27.3"
@@ -43,6 +48,13 @@ netty-buffer = { module = "io.netty:netty-buffer" }
 
 kafka-clients = { module = "org.apache.kafka:kafka-clients", version.ref = "kafka" }
 
+flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+# Flyway 10+ moved per-database support into separate artifacts; without this one it
+# refuses to run against PostgreSQL at all.
+flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikari" }
+
 micrometer-bom = { module = "io.micrometer:micrometer-bom", version.ref = "micrometer" }
 micrometer-core = { module = "io.micrometer:micrometer-core" }
 micrometer-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
@@ -61,6 +73,7 @@ logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "lo
 testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
 testcontainers-core = { module = "org.testcontainers:testcontainers" }
 testcontainers-kafka = { module = "org.testcontainers:testcontainers-kafka" }
+testcontainers-postgresql = { module = "org.testcontainers:testcontainers-postgresql" }
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
