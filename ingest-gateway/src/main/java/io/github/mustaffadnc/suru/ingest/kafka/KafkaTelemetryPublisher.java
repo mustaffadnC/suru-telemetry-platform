@@ -153,6 +153,18 @@ public final class KafkaTelemetryPublisher implements TelemetryPublisher {
     }
 
     /**
+     * Blocks until every record handed to this publisher has been acknowledged.
+     *
+     * <p>Records linger in the producer's batch buffer by design, so "the gateway finished
+     * reading" and "the broker has the data" are different moments. Anything that needs the second
+     * — a test that counts records, a graceful shutdown — must ask for it rather than wait and
+     * hope.
+     */
+    public void flush() {
+        producer.flush();
+    }
+
+    /**
      * Producer metrics, for wiring into a meter registry.
      *
      * @return the producer's metrics

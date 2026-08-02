@@ -5,6 +5,7 @@ import io.github.mustaffadnc.suru.ingest.DeviceRegistry;
 import io.github.mustaffadnc.suru.ingest.GatewayCounters;
 import io.github.mustaffadnc.suru.ingest.TelemetryPublisher;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkDialect;
+import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -13,6 +14,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import java.net.InetSocketAddress;
 import org.slf4j.Logger;
@@ -43,6 +45,8 @@ public final class TelemetryGateway implements AutoCloseable {
     private EventLoopGroup acceptGroup;
     private EventLoopGroup ioGroup;
     private Channel serverChannel;
+    private Channel datagramChannel;
+    private MavlinkDatagramHandler datagramHandler;
 
     /**
      * Creates a gateway.
@@ -75,10 +79,7 @@ public final class TelemetryGateway implements AutoCloseable {
         if (serverChannel != null) {
             throw new IllegalStateException("gateway already started");
         }
-        // Netty 4.2's event loop API: NioEventLoopGroup is deprecated in favour of an
-        // IoHandler-based group.
-        acceptGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
-        ioGroup = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
+        ensureGroups();
 
         ServerBootstrap bootstrap =
                 new ServerBootstrap()
@@ -111,12 +112,69 @@ public final class TelemetryGateway implements AutoCloseable {
     }
 
     /**
-     * The bound address.
+     * Binds a datagram socket and begins accepting telemetry on it.
      *
-     * @return the address, or {@code null} if not started
+     * <p>Unlike the TCP listener this exerts no backpressure, because UDP offers none to exert:
+     * the handler keeps reading and relies on shedding. See {@link MavlinkDatagramHandler} and
+     * ADR-0003.
+     *
+     * @param port UDP port, or {@code 0} for an ephemeral one
+     * @return the address actually bound
+     * @throws InterruptedException if the bind is interrupted
+     * @throws IllegalStateException if UDP is already bound
+     */
+    public InetSocketAddress startUdp(int port) throws InterruptedException {
+        if (datagramChannel != null) {
+            throw new IllegalStateException("udp listener already started");
+        }
+        ensureGroups();
+
+        datagramHandler =
+                new MavlinkDatagramHandler(dialect, admission, publisher, registry, counters);
+
+        Bootstrap bootstrap =
+                new Bootstrap()
+                        .group(ioGroup)
+                        .channel(NioDatagramChannel.class)
+                        // A telemetry link bursts; a larger receive buffer absorbs bursts that
+                        // would otherwise be dropped by the kernel before the gateway ever
+                        // sees them — the loss this transport cannot count.
+                        .option(ChannelOption.SO_RCVBUF, 4 * 1024 * 1024)
+                        .option(ChannelOption.SO_REUSEADDR, true)
+                        .handler(datagramHandler);
+
+        datagramChannel = bootstrap.bind(port).sync().channel();
+        InetSocketAddress bound = (InetSocketAddress) datagramChannel.localAddress();
+        log.info("telemetry gateway listening for datagrams on {}", bound);
+        return bound;
+    }
+
+    private void ensureGroups() {
+        if (ioGroup != null) {
+            return;
+        }
+        // Netty 4.2's event loop API: NioEventLoopGroup is deprecated in favour of an
+        // IoHandler-based group.
+        acceptGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        ioGroup = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
+    }
+
+    /**
+     * The bound TCP address.
+     *
+     * @return the address, or {@code null} if TCP is not started
      */
     public InetSocketAddress localAddress() {
         return serverChannel == null ? null : (InetSocketAddress) serverChannel.localAddress();
+    }
+
+    /**
+     * How many UDP senders currently hold reassembly state.
+     *
+     * @return the count, or {@code 0} if UDP is not started
+     */
+    public int trackedUdpSenders() {
+        return datagramHandler == null ? 0 : datagramHandler.trackedSenders();
     }
 
     /**
@@ -133,6 +191,11 @@ public final class TelemetryGateway implements AutoCloseable {
         if (serverChannel != null) {
             serverChannel.close().syncUninterruptibly();
             serverChannel = null;
+        }
+        if (datagramChannel != null) {
+            datagramChannel.close().syncUninterruptibly();
+            datagramChannel = null;
+            datagramHandler = null;
         }
         if (acceptGroup != null) {
             acceptGroup.shutdownGracefully().syncUninterruptibly();

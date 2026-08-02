@@ -1,6 +1,7 @@
 package io.github.mustaffadnc.suru.ingest.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import io.github.mustaffadnc.suru.ingest.AdmissionController;
 import io.github.mustaffadnc.suru.ingest.DeviceRegistry;
@@ -106,6 +107,27 @@ class KafkaTelemetryPublisherIT {
         return header == null ? null : new String(header.value(), StandardCharsets.UTF_8);
     }
 
+    /**
+     * Waits until the gateway has read the whole stream and the broker has acknowledged all of it.
+     *
+     * <p>Both conditions are needed, and in this order. Waiting only for {@code inFlight == 0} does
+     * not work: it is trivially true before the gateway has read a single byte, so the wait returns
+     * immediately and the subsequent count races the ingest. That is not a slow test, it is a test
+     * that never waited — it passed or failed on how quickly the machine happened to schedule the
+     * event loop.
+     */
+    private static void settle(
+            AdmissionController admission, KafkaTelemetryPublisher publisher, int expectedFrames) {
+        await().atMost(Duration.ofSeconds(60))
+                .untilAsserted(
+                        () ->
+                                assertThat(admission.stats().accepted())
+                                        .isEqualTo(expectedFrames));
+        await().atMost(Duration.ofSeconds(60))
+                .untilAsserted(() -> assertThat(admission.stats().inFlight()).isZero());
+        publisher.flush();
+    }
+
     private static void sendOverTcp(InetSocketAddress address, byte[] data) {
         try (Socket socket = new Socket(address.getAddress(), address.getPort())) {
             socket.setTcpNoDelay(true);
@@ -136,6 +158,7 @@ class KafkaTelemetryPublisherIT {
 
             InetSocketAddress address = gateway.start(0);
             sendOverTcp(address, sitlStream);
+            settle(admission, publisher, EXPECTED_FRAMES);
 
             List<ConsumerRecord<String, byte[]>> records = drain(TOPIC, EXPECTED_FRAMES);
 
@@ -163,17 +186,19 @@ class KafkaTelemetryPublisherIT {
         String topic = "telemetry.ordering";
         createTopic(topic);
 
+        AdmissionController admission = new AdmissionController();
         try (KafkaTelemetryPublisher publisher =
                         new KafkaTelemetryPublisher(kafka.getBootstrapServers(), topic);
                 TelemetryGateway gateway =
                         new TelemetryGateway(
                                 MavlinkDialect.arduPilotMega(),
-                                new AdmissionController(),
+                                admission,
                                 publisher,
                                 DeviceRegistry.open())) {
 
             InetSocketAddress address = gateway.start(0);
             sendOverTcp(address, sitlStream);
+            settle(admission, publisher, EXPECTED_FRAMES);
 
             List<ConsumerRecord<String, byte[]>> records = drain(topic, EXPECTED_FRAMES);
             assertThat(records).hasSize(EXPECTED_FRAMES);

@@ -107,6 +107,51 @@ that actually punishes allocation: sustained ingest, where the cost surfaces as 
 than as time in the decode loop. That measurement belongs in phase 6 with GC instrumentation, and is
 listed below. What is claimed here is only what was measured.
 
+## Phase 2 — ingest gateway
+
+Measured 2 Aug 2026.
+
+```bash
+./gradlew :ingest-gateway:test --rerun -Dsuru.loadtest=true -Dsuru.loadtest.connections=32 -Dsuru.loadtest.repeats=20 --tests '*GatewayLoadTest*'
+```
+
+32 simultaneous TCP connections, each replaying the recorded SITL flight 20 times: 677,120 frames,
+22.1 MB, into an in-memory publisher (Kafka's own throughput is a separate question and belongs to
+phase 6's load work).
+
+| | |
+|---|---:|
+| Frames ingested | 677,120 |
+| Wall time | 0.47 s |
+| **Throughput** | **1,437,289 frames/s · 46.9 MB/s** |
+| Peak in-flight publications | 20 (capacity 262,144) |
+| Shed | 0 |
+| Read pauses | 0 |
+| Publish failures | 0 |
+
+Nothing was shed and reads never paused, which is the expected result when the downstream keeps up:
+admission control should be invisible until it is needed.
+
+### The first measurement was wrong by a factor of 850
+
+The initial run reported **1,692 frames/s**. That number was nonsense, and the way it was nonsense
+is worth keeping:
+
+The decoder alone had already been measured at 16.6 M frames/s, so a gateway wrapping it could not
+plausibly be four orders of magnitude slower. The cause was `InMemoryTelemetryPublisher` collecting
+into a `CopyOnWriteArrayList`, whose `add` copies the entire backing array — 677k appends is on the
+order of 10¹¹ element copies. **The load test was measuring the test double, not the system under
+test.** Swapping in a `ConcurrentLinkedQueue` and counting rather than retaining took the same run
+from 7 min 01 s to 24 s.
+
+The lesson generalises past this one bug: a harness sits on the hot path exactly like production
+code does, and a number that disagrees with a component measurement by orders of magnitude is
+evidence about the harness before it is evidence about the system.
+
+A second distortion was fixed at the same time — with no Logback configuration present, the default
+level is DEBUG, so Netty logged its platform probe and logging sat on the ingest path. Tests now pin
+WARN via `logback-test.xml`.
+
 ## Planned measurements
 
 | Phase | Question | Method |

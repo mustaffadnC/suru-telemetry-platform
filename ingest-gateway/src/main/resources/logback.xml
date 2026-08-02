@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logback defaults to DEBUG when it finds no configuration, which puts logging on the ingest path
+  and floods the output with Netty's startup probe. This pins sensible levels for the gateway.
+-->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} -- %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Netty logs its entire platform probe at DEBUG on startup. -->
+  <logger name="io.netty" level="WARN"/>
+  <logger name="org.apache.kafka" level="WARN"/>
+
+  <!-- Per-link open/close is worth an INFO; per-frame anything is not. The handler's read-gate
+       transitions are at DEBUG deliberately: they fire under load, which is when logging is
+       most expensive. -->
+  <logger name="io.github.mustaffadnc.suru" level="INFO"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

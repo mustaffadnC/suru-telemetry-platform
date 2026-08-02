@@ -27,8 +27,13 @@ tasks.withType<JavaCompile>().configureEach {
     )
 }
 
+// Measurement runs are gated behind -Dsuru.* properties so they stay out of `check`; Gradle
+// does not forward system properties to the test JVM on its own.
+val suruProperties = providers.systemPropertiesPrefixedBy("suru.")
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    systemProperties(suruProperties.get())
     testLogging {
         events("passed", "skipped", "failed")
         exceptionFormat = TestExceptionFormat.FULL

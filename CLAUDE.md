@@ -175,6 +175,17 @@ pass.**
   the protocol module.
 - The read gate is re-checked between read batches, so capacity must exceed frames-per-batch or the
   gateway sheds where pausing should have sufficed.
+- **UDP never touches `autoRead`.** Pausing a datagram socket does not slow the sender; it moves the
+  loss into the kernel where it cannot be counted. That transport keeps reading and sheds.
+- **A wait condition that is already true when the wait begins is not a wait.** The Kafka IT first
+  waited for `inFlight == 0`, which holds before the gateway has read a byte — it returned instantly
+  and raced the ingest. Wait for the *accepted* count first, then for drain, then `flush()`.
+- **Measurement harnesses sit on the hot path too.** The load test's publisher used a
+  `CopyOnWriteArrayList` and became the bottleneck, reporting 1,692 frames/s against a real
+  1.44 M frames/s. When a number disagrees with a component measurement by orders of magnitude,
+  suspect the harness first.
+- Logback defaults to DEBUG with no config, putting Netty's startup probe and per-frame logging on
+  the ingest path. `logback.xml` (main) and `logback-test.xml` (test) pin the levels.
 
 ## Invariants
 
@@ -223,11 +234,10 @@ table / screenshot) — the repo stays presentable at any moment.
   differential tests against two Python oracles, table-driven CRC + JMH. The real 36 KB SITL
   recording decodes to 1058 frames, 0 checksum errors, 0 unknown messages, 119 bytes of boot banner
   resynced; 568 MB/s.
-- **Phase 2 🚧** — ingest gateway. Done: Netty TCP server, admission control (read-pause then
+- **Phase 2 🚧** — ingest gateway. Done: Netty TCP + UDP, admission control (read-pause then
   priority shedding), tenant/device attribution, Kafka publisher (idempotent, device-keyed),
-  ADR-0003, Testcontainers integration tests. Remaining: **UDP ingest, dedup, Micrometer/Prometheus
-  wiring, HK ingest path, and the SITL-fleet load measurement that is the phase's acceptance
-  criterion.**
+  Micrometer binding, ADR-0003, Testcontainers integration tests, load measurement
+  (1.44 M frames/s across 32 connections). Remaining: **dedup and the HK ingest path.**
 - **Phase 3** — TimescaleDB schema + query API, QuestDB comparison → ADR-0004
 - **Phase 4** — Kafka Streams windowing, rules engine (debounce/hysteresis), alert state machine
 - **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log

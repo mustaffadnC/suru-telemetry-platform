@@ -24,7 +24,7 @@ That means every design decision here is answerable from both ends of the link:
 |---|---|---|
 | 0 | Build infrastructure, convention plugins, compose stack, CI, ADRs, CRC core | ✅ done |
 | 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
-| 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | 🚧 TCP + admission control + Kafka done; UDP, dedup and fleet load test remain |
+| 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | 🚧 TCP, UDP, admission control, Kafka and metrics done; dedup and the HK ingest path remain |
 | 3 | TimescaleDB schema, continuous aggregates, query API | ⬜ |
 | 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ⬜ |
 | 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
@@ -37,9 +37,15 @@ Nothing above is claimed as working until its phase is marked done and the numbe
 
 **Phase 1, verified:** 34 tests green. The 36 KB recorded SITL stream decodes to **1058 frames with zero checksum errors and zero unknown messages**, after resyncing past 119 bytes of boot banner — reproducing the reference decoder's output exactly, under every input chunking from one byte upward. Decode throughput **568 MB/s** (16.6 M frames/s); table-driven CRC made the whole decoder 2.9–3.1× faster. Numbers and method in [`docs/benchmarks.md`](docs/benchmarks.md); protocol details and the reasoning behind resync in [`docs/protocol.md`](docs/protocol.md).
 
-**Phase 2, so far:** the gateway takes MAVLink off a TCP socket, attributes it to a tenant and device, and publishes to Kafka keyed by device — 52 tests green, including two against a real broker in a container. Under load it applies the lossless remedy first: above 60 % pressure it stops reading and lets TCP's own flow control slow the sender, and only above that does it shed, bulk diagnostics first and heartbeats never. Reasoning in [ADR-0003](docs/adr/ADR-0003-backpressure-and-shedding.md).
+**Phase 2, so far:** the gateway takes MAVLink off TCP and UDP sockets, attributes it to a tenant and device, and publishes to Kafka keyed by device — 59 tests green, including two against a real broker in a container. Sustained ingest measured at **1.44 M frames/s (46.9 MB/s)** across 32 simultaneous connections, nothing shed and reads never paused.
 
-> The shedding thresholds were wrong in the first draft — bulk was discarded at 50 % while reads paused at 80 %, throwing data away while a lossless option sat untried. Caught while writing the tests; a test now pins the invariant that a pressure band must exist where the gateway has stopped reading and is still losing nothing.
+Under load it applies the lossless remedy first: above 60 % pressure a TCP channel stops reading and lets TCP's own flow control slow the sender, and only above that does it shed — bulk diagnostics first, heartbeats never. UDP gets no such option and says so: with no back channel, declining to read just moves the loss into the kernel where it cannot be counted, so that transport keeps reading and sheds explicitly. Reasoning in [ADR-0003](docs/adr/ADR-0003-backpressure-and-shedding.md).
+
+Two more corrections worth recording, since both were beliefs the work overturned:
+
+> **The shedding thresholds were backwards in the first draft** — bulk discarded at 50 % while reads paused at 80 %, throwing data away while a lossless option sat untried. A test now pins the invariant that a pressure band must exist where the gateway has stopped reading and is still losing nothing.
+
+> **The first load measurement was wrong by a factor of 850.** It reported 1,692 frames/s for a gateway wrapping a decoder already measured at 16.6 M frames/s — a gap far too large to be real. The cause was the test's own publisher collecting into a `CopyOnWriteArrayList`, whose `add` copies the whole array: the harness was the bottleneck, not the system. Details in [`docs/benchmarks.md`](docs/benchmarks.md).
 
 Three findings from phase 1 are written up rather than quietly fixed, because each one was a belief that measurement or testing overturned:
 
