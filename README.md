@@ -1,5 +1,7 @@
 # SÜRÜ
 
+[![CI](https://github.com/mustaffadnC/suru-telemetry-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaffadnC/suru-telemetry-platform/actions/workflows/ci.yml)
+
 **A fleet telemetry and command-and-control platform for UAVs and IoT devices** — written in Java 25, built from the transport layer up.
 
 > 🇹🇷 *Türkçe özet aşağıda.*
