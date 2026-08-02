@@ -143,7 +143,7 @@ public final class MavlinkIngestHandler extends ChannelInboundHandlerAdapter {
                 frame.sequence(),
                 frame.systemId(),
                 frame.componentId(),
-                System.nanoTime(),
+                TelemetryEnvelope.nowEpochNanos(),
                 priority,
                 frame.copyPayload());
     }

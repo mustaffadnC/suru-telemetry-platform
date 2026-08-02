@@ -12,7 +12,7 @@ import java.util.Objects;
  * second and must not allocate one object per frame. Call {@link #copyPayload()} or
  * {@link #toImmutable()} if the data has to outlive the callback.
  */
-public final class MavlinkFrame {
+public final class MavlinkFrame implements MavlinkPayload {
 
     /** Start byte of a MAVLink v1 frame. */
     public static final int STX_V1 = 0xFE;

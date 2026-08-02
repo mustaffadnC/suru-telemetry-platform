@@ -119,7 +119,7 @@ public final class HkIngestHandler extends ChannelInboundHandlerAdapter {
                         -1,
                         -1,
                         -1,
-                        System.nanoTime(),
+                        TelemetryEnvelope.nowEpochNanos(),
                         priority,
                         record.copyPayload());
 

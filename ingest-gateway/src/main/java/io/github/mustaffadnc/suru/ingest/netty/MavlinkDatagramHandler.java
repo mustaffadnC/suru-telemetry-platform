@@ -145,7 +145,7 @@ public final class MavlinkDatagramHandler extends SimpleChannelInboundHandler<Da
                         frame.sequence(),
                         frame.systemId(),
                         frame.componentId(),
-                        System.nanoTime(),
+                        TelemetryEnvelope.nowEpochNanos(),
                         priority,
                         frame.copyPayload());
 

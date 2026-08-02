@@ -77,12 +77,26 @@ public final class MavlinkMetrics {
      * @param sink receives each measurement
      */
     public static void extract(MavlinkFrame frame, MetricSink sink) {
-        switch (frame.messageId()) {
-            case MSG_GLOBAL_POSITION_INT -> globalPosition(frame, sink);
-            case MSG_ATTITUDE -> attitude(frame, sink);
-            case MSG_VFR_HUD -> vfrHud(frame, sink);
-            case MSG_SYS_STATUS -> sysStatus(frame, sink);
-            case MSG_GPS_RAW_INT -> gpsRaw(frame, sink);
+        extract(frame.messageId(), frame, sink);
+    }
+
+    /**
+     * Emits the measurements carried by a payload.
+     *
+     * <p>The overload the storage layer uses: by the time a record is read back off Kafka the
+     * frame is long gone, and only the message id and the payload bytes remain.
+     *
+     * @param messageId MAVLink message id
+     * @param payload the message payload
+     * @param sink receives each measurement
+     */
+    public static void extract(int messageId, MavlinkPayload payload, MetricSink sink) {
+        switch (messageId) {
+            case MSG_GLOBAL_POSITION_INT -> globalPosition(payload, sink);
+            case MSG_ATTITUDE -> attitude(payload, sink);
+            case MSG_VFR_HUD -> vfrHud(payload, sink);
+            case MSG_SYS_STATUS -> sysStatus(payload, sink);
+            case MSG_GPS_RAW_INT -> gpsRaw(payload, sink);
             default -> {
                 // Not a message this platform stores; the frame still reaches Kafka.
             }
@@ -90,7 +104,7 @@ public final class MavlinkMetrics {
     }
 
     /** GLOBAL_POSITION_INT: uint32 time, int32 lat/lon/alt/relative_alt, int16 vx/vy/vz, uint16 hdg. */
-    private static void globalPosition(MavlinkFrame f, MetricSink sink) {
+    private static void globalPosition(MavlinkPayload f, MetricSink sink) {
         sink.accept("position.latitude_deg", f.i32(4) / 1e7);
         sink.accept("position.longitude_deg", f.i32(8) / 1e7);
         sink.accept("position.altitude_msl_m", f.i32(12) / 1000.0);
@@ -105,7 +119,7 @@ public final class MavlinkMetrics {
     }
 
     /** ATTITUDE: uint32 time, then six floats. */
-    private static void attitude(MavlinkFrame f, MetricSink sink) {
+    private static void attitude(MavlinkPayload f, MetricSink sink) {
         sink.accept("attitude.roll_rad", f.f32(4));
         sink.accept("attitude.pitch_rad", f.f32(8));
         sink.accept("attitude.yaw_rad", f.f32(12));
@@ -121,7 +135,7 @@ public final class MavlinkMetrics {
      * {@code throttle} are declared between {@code groundspeed} and {@code alt} but transmitted
      * after both floats.
      */
-    private static void vfrHud(MavlinkFrame f, MetricSink sink) {
+    private static void vfrHud(MavlinkPayload f, MetricSink sink) {
         sink.accept("speed.airspeed_ms", f.f32(0));
         sink.accept("speed.groundspeed_ms", f.f32(4));
         sink.accept("position.altitude_hud_m", f.f32(8));
@@ -131,7 +145,7 @@ public final class MavlinkMetrics {
     }
 
     /** SYS_STATUS: three uint32 sensor masks, then load, voltage, current, comm counters. */
-    private static void sysStatus(MavlinkFrame f, MetricSink sink) {
+    private static void sysStatus(MavlinkPayload f, MetricSink sink) {
         sink.accept("power.load_pct", f.u16(12) / 10.0);
 
         int millivolts = f.u16(14);
@@ -150,7 +164,7 @@ public final class MavlinkMetrics {
     }
 
     /** GPS_RAW_INT: uint64 time_usec, int32 lat/lon/alt, uint16 eph/epv/vel/cog, uint8 fix/sats. */
-    private static void gpsRaw(MavlinkFrame f, MetricSink sink) {
+    private static void gpsRaw(MavlinkPayload f, MetricSink sink) {
         sink.accept("gps.fix_type", f.u8(28));
         sink.accept("gps.satellites", f.u8(29));
 

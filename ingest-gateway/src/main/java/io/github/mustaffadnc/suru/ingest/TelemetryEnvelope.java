@@ -1,5 +1,6 @@
 package io.github.mustaffadnc.suru.ingest;
 
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -32,6 +33,33 @@ public record TelemetryEnvelope(
         long receivedAtEpochNanos,
         MessagePriority priority,
         byte[] payload) {
+
+    /**
+     * The gateway receive time, as nanoseconds since the epoch.
+     *
+     * <p><b>Not {@code System.nanoTime()}.</b> That counts from an arbitrary origin and is only
+     * meaningful as a difference between two readings on the same JVM — used as a timestamp it
+     * produces a number that looks like nanoseconds since 1970 and is not, which downstream turns
+     * into rows dated somewhere around 1970 or 2262 depending on the machine's uptime. This field
+     * is written to a {@code TIMESTAMPTZ} column, so it has to be wall clock.
+     *
+     * @return nanoseconds since 1970-01-01T00:00:00Z
+     */
+    public static long nowEpochNanos() {
+        Instant now = Instant.now();
+        return now.getEpochSecond() * 1_000_000_000L + now.getNano();
+    }
+
+    /**
+     * Converts this envelope's receive time back to an instant.
+     *
+     * @return the receive time
+     */
+    public Instant receivedAt() {
+        return Instant.ofEpochSecond(
+                Math.floorDiv(receivedAtEpochNanos, 1_000_000_000L),
+                Math.floorMod(receivedAtEpochNanos, 1_000_000_000L));
+    }
 
     /** Which framing the message arrived in. */
     public enum SourceProtocol {
