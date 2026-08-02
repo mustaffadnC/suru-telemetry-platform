@@ -82,6 +82,38 @@ public enum MessagePriority {
     }
 
     /**
+     * Classifies a ÇARGE capsule log record.
+     *
+     * <p>The shape of the judgement is different here, because the traffic is. A capsule produces
+     * a handful of irreplaceable records and a flood of routine ones:
+     *
+     * <ul>
+     *   <li>{@code EVENT} is a mission state transition — release, descent, landing. There is
+     *       exactly one of each per flight and losing it means losing when the capsule was
+     *       released. Nothing else reconstructs that.
+     *   <li>{@code META} appears once per log and identifies the firmware and reset cause; without
+     *       it the rest of the file cannot be attributed to a build.
+     *   <li>{@code IMU} arrives at 100 Hz. Any individual sample is disposable; the shape of the
+     *       descent survives losing a great many of them.
+     * </ul>
+     *
+     * @param recordType HK record type byte
+     * @return the priority band
+     */
+    public static MessagePriority ofHk(int recordType) {
+        return switch (recordType) {
+            case 1, // META — one per log, identifies the build
+                    5 -> // EVENT — mission state transition, one of each per flight
+                    CRITICAL;
+            case 2, // ENV — carries battery and mission state
+                    4 -> // GPS — position fix
+                    HIGH;
+            case 3 -> BULK; // IMU — 100 Hz
+            default -> NORMAL;
+        };
+    }
+
+    /**
      * Whether this band may be discarded at a given pressure level.
      *
      * <p><b>Every threshold here sits above the read-pause watermark, on purpose.</b> Pausing a TCP

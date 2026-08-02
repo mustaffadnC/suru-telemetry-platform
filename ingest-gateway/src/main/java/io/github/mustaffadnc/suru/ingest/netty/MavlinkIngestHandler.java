@@ -6,6 +6,7 @@ import io.github.mustaffadnc.suru.ingest.GatewayCounters;
 import io.github.mustaffadnc.suru.ingest.MessagePriority;
 import io.github.mustaffadnc.suru.ingest.TelemetryEnvelope;
 import io.github.mustaffadnc.suru.ingest.TelemetryPublisher;
+import io.github.mustaffadnc.suru.ingest.dedup.DuplicateFilter;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkDecoder;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkDialect;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkFrame;
@@ -37,6 +38,7 @@ public final class MavlinkIngestHandler extends ChannelInboundHandlerAdapter {
     private final TelemetryPublisher publisher;
     private final DeviceRegistry registry;
     private final GatewayCounters counters;
+    private final DuplicateFilter duplicates;
 
     private String tenantId;
     private String linkId;
@@ -51,18 +53,21 @@ public final class MavlinkIngestHandler extends ChannelInboundHandlerAdapter {
      * @param publisher where admitted telemetry goes
      * @param registry resolves the owning tenant
      * @param counters gateway-wide counters
+     * @param duplicates suppresses telemetry already seen
      */
     public MavlinkIngestHandler(
             MavlinkDialect dialect,
             AdmissionController admission,
             TelemetryPublisher publisher,
             DeviceRegistry registry,
-            GatewayCounters counters) {
+            GatewayCounters counters,
+            DuplicateFilter duplicates) {
         this.decoder = new MavlinkDecoder(dialect);
         this.admission = admission;
         this.publisher = publisher;
         this.registry = registry;
         this.counters = counters;
+        this.duplicates = duplicates;
     }
 
     @Override
@@ -109,17 +114,15 @@ public final class MavlinkIngestHandler extends ChannelInboundHandlerAdapter {
         // The frame is a view into the decoder's buffer and dies when this returns, so the
         // payload is copied here. This is the one place the flyweight boundary is crossed.
         TelemetryEnvelope envelope =
-                new TelemetryEnvelope(
-                        tenantId,
-                        DeviceRegistry.deviceIdOf(linkId, frame.systemId()),
-                        TelemetryEnvelope.SourceProtocol.MAVLINK,
-                        frame.messageId(),
-                        frame.sequence(),
-                        frame.systemId(),
-                        frame.componentId(),
-                        System.nanoTime(),
-                        priority,
-                        frame.copyPayload());
+                buildEnvelope(frame, priority);
+
+        // Deduplication runs after admission so a suppressed duplicate still releases the
+        // capacity it reserved; skipping the release here would leak pressure and eventually
+        // wedge the gateway shut.
+        if (duplicates.isDuplicate(envelope)) {
+            admission.release();
+            return;
+        }
 
         publisher.publish(envelope)
                 .whenComplete(
@@ -129,6 +132,20 @@ public final class MavlinkIngestHandler extends ChannelInboundHandlerAdapter {
                                 counters.publishFailed();
                             }
                         });
+    }
+
+    private TelemetryEnvelope buildEnvelope(MavlinkFrame frame, MessagePriority priority) {
+        return new TelemetryEnvelope(
+                tenantId,
+                DeviceRegistry.deviceIdOf(linkId, frame.systemId()),
+                TelemetryEnvelope.SourceProtocol.MAVLINK,
+                frame.messageId(),
+                frame.sequence(),
+                frame.systemId(),
+                frame.componentId(),
+                System.nanoTime(),
+                priority,
+                frame.copyPayload());
     }
 
     /**

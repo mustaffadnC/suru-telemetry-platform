@@ -4,6 +4,7 @@ import io.github.mustaffadnc.suru.ingest.AdmissionController;
 import io.github.mustaffadnc.suru.ingest.DeviceRegistry;
 import io.github.mustaffadnc.suru.ingest.GatewayCounters;
 import io.github.mustaffadnc.suru.ingest.TelemetryPublisher;
+import io.github.mustaffadnc.suru.ingest.dedup.DuplicateFilter;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkDialect;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
@@ -40,12 +41,14 @@ public final class TelemetryGateway implements AutoCloseable {
     private final AdmissionController admission;
     private final TelemetryPublisher publisher;
     private final DeviceRegistry registry;
+    private final DuplicateFilter duplicates;
     private final GatewayCounters counters = new GatewayCounters();
 
     private EventLoopGroup acceptGroup;
     private EventLoopGroup ioGroup;
     private Channel serverChannel;
     private Channel datagramChannel;
+    private Channel hkChannel;
     private MavlinkDatagramHandler datagramHandler;
 
     /**
@@ -61,10 +64,34 @@ public final class TelemetryGateway implements AutoCloseable {
             AdmissionController admission,
             TelemetryPublisher publisher,
             DeviceRegistry registry) {
+        this(dialect, admission, publisher, registry, DuplicateFilter.disabled());
+    }
+
+    /**
+     * Creates a gateway with deduplication.
+     *
+     * <p>Deduplication is opt-in rather than the default, because suppression is only correct when
+     * duplicates are actually possible on the link. It is also indistinguishable from deliberate
+     * replay: feeding the same recording twice down one connection produces byte-identical
+     * messages, and a filter cannot tell that apart from a device sending twice.
+     *
+     * @param dialect MAVLink dialect used to validate frames
+     * @param admission admission controller shared across connections
+     * @param publisher where admitted telemetry goes
+     * @param registry resolves the owning tenant for a connection
+     * @param duplicates suppresses telemetry already seen
+     */
+    public TelemetryGateway(
+            MavlinkDialect dialect,
+            AdmissionController admission,
+            TelemetryPublisher publisher,
+            DeviceRegistry registry,
+            DuplicateFilter duplicates) {
         this.dialect = dialect;
         this.admission = admission;
         this.publisher = publisher;
         this.registry = registry;
+        this.duplicates = duplicates;
     }
 
     /**
@@ -101,7 +128,8 @@ public final class TelemetryGateway implements AutoCloseable {
                                                                 admission,
                                                                 publisher,
                                                                 registry,
-                                                                counters));
+                                                                counters,
+                                                                duplicates));
                                     }
                                 });
 
@@ -130,7 +158,8 @@ public final class TelemetryGateway implements AutoCloseable {
         ensureGroups();
 
         datagramHandler =
-                new MavlinkDatagramHandler(dialect, admission, publisher, registry, counters);
+                new MavlinkDatagramHandler(
+                        dialect, admission, publisher, registry, counters, duplicates);
 
         Bootstrap bootstrap =
                 new Bootstrap()
@@ -146,6 +175,52 @@ public final class TelemetryGateway implements AutoCloseable {
         datagramChannel = bootstrap.bind(port).sync().channel();
         InetSocketAddress bound = (InetSocketAddress) datagramChannel.localAddress();
         log.info("telemetry gateway listening for datagrams on {}", bound);
+        return bound;
+    }
+
+    /**
+     * Binds a second TCP listener for ÇARGE capsule log uploads.
+     *
+     * <p>A separate port rather than protocol sniffing on one: the two framings are trivially
+     * distinguishable by their magic bytes, but guessing which one a connection speaks means the
+     * first frame decides, and a link that opens with garbage — which the MAVLink one routinely
+     * does — would be misclassified. The port is the declaration.
+     *
+     * @param port TCP port, or {@code 0} for an ephemeral one
+     * @return the address actually bound
+     * @throws InterruptedException if the bind is interrupted
+     * @throws IllegalStateException if the HK listener is already started
+     */
+    public InetSocketAddress startHk(int port) throws InterruptedException {
+        if (hkChannel != null) {
+            throw new IllegalStateException("hk listener already started");
+        }
+        ensureGroups();
+
+        ServerBootstrap bootstrap =
+                new ServerBootstrap()
+                        .group(acceptGroup, ioGroup)
+                        .channel(NioServerSocketChannel.class)
+                        .option(ChannelOption.SO_BACKLOG, 128)
+                        .childOption(ChannelOption.SO_KEEPALIVE, true)
+                        .childHandler(
+                                new ChannelInitializer<SocketChannel>() {
+                                    @Override
+                                    protected void initChannel(SocketChannel ch) {
+                                        ch.pipeline()
+                                                .addLast(
+                                                        new HkIngestHandler(
+                                                                admission,
+                                                                publisher,
+                                                                registry,
+                                                                counters,
+                                                                duplicates));
+                                    }
+                                });
+
+        hkChannel = bootstrap.bind(port).sync().channel();
+        InetSocketAddress bound = (InetSocketAddress) hkChannel.localAddress();
+        log.info("capsule log upload listening on {}", bound);
         return bound;
     }
 
@@ -196,6 +271,10 @@ public final class TelemetryGateway implements AutoCloseable {
             datagramChannel.close().syncUninterruptibly();
             datagramChannel = null;
             datagramHandler = null;
+        }
+        if (hkChannel != null) {
+            hkChannel.close().syncUninterruptibly();
+            hkChannel = null;
         }
         if (acceptGroup != null) {
             acceptGroup.shutdownGracefully().syncUninterruptibly();

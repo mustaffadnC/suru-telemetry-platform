@@ -6,6 +6,7 @@ import io.github.mustaffadnc.suru.ingest.GatewayCounters;
 import io.github.mustaffadnc.suru.ingest.MessagePriority;
 import io.github.mustaffadnc.suru.ingest.TelemetryEnvelope;
 import io.github.mustaffadnc.suru.ingest.TelemetryPublisher;
+import io.github.mustaffadnc.suru.ingest.dedup.DuplicateFilter;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkDecoder;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkDialect;
 import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkFrame;
@@ -53,6 +54,7 @@ public final class MavlinkDatagramHandler extends SimpleChannelInboundHandler<Da
     private final TelemetryPublisher publisher;
     private final DeviceRegistry registry;
     private final GatewayCounters counters;
+    private final DuplicateFilter duplicates;
 
     private final Map<InetSocketAddress, Sender> senders =
             new LinkedHashMap<>(64, 0.75f, true) {
@@ -77,18 +79,21 @@ public final class MavlinkDatagramHandler extends SimpleChannelInboundHandler<Da
      * @param publisher where admitted telemetry goes
      * @param registry resolves the owning tenant
      * @param counters gateway-wide counters
+     * @param duplicates suppresses telemetry already seen
      */
     public MavlinkDatagramHandler(
             MavlinkDialect dialect,
             AdmissionController admission,
             TelemetryPublisher publisher,
             DeviceRegistry registry,
-            GatewayCounters counters) {
+            GatewayCounters counters,
+            DuplicateFilter duplicates) {
         this.dialect = dialect;
         this.admission = admission;
         this.publisher = publisher;
         this.registry = registry;
         this.counters = counters;
+        this.duplicates = duplicates;
     }
 
     @Override
@@ -143,6 +148,13 @@ public final class MavlinkDatagramHandler extends SimpleChannelInboundHandler<Da
                         System.nanoTime(),
                         priority,
                         frame.copyPayload());
+
+        // Duplicates matter more on UDP than on TCP: a datagram can genuinely be delivered twice
+        // by the network, which TCP's own sequencing rules out.
+        if (duplicates.isDuplicate(envelope)) {
+            admission.release();
+            return;
+        }
 
         publisher.publish(envelope)
                 .whenComplete(

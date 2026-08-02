@@ -24,7 +24,7 @@ That means every design decision here is answerable from both ends of the link:
 |---|---|---|
 | 0 | Build infrastructure, convention plugins, compose stack, CI, ADRs, CRC core | ✅ done |
 | 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
-| 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | 🚧 TCP, UDP, admission control, Kafka and metrics done; dedup and the HK ingest path remain |
+| 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ✅ done |
 | 3 | TimescaleDB schema, continuous aggregates, query API | ⬜ |
 | 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ⬜ |
 | 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
@@ -37,7 +37,7 @@ Nothing above is claimed as working until its phase is marked done and the numbe
 
 **Phase 1, verified:** 34 tests green. The 36 KB recorded SITL stream decodes to **1058 frames with zero checksum errors and zero unknown messages**, after resyncing past 119 bytes of boot banner — reproducing the reference decoder's output exactly, under every input chunking from one byte upward. Decode throughput **568 MB/s** (16.6 M frames/s); table-driven CRC made the whole decoder 2.9–3.1× faster. Numbers and method in [`docs/benchmarks.md`](docs/benchmarks.md); protocol details and the reasoning behind resync in [`docs/protocol.md`](docs/protocol.md).
 
-**Phase 2, so far:** the gateway takes MAVLink off TCP and UDP sockets, attributes it to a tenant and device, and publishes to Kafka keyed by device — 59 tests green, including two against a real broker in a container. Sustained ingest measured at **1.44 M frames/s (46.9 MB/s)** across 32 simultaneous connections, nothing shed and reads never paused.
+**Phase 2, verified:** the gateway takes MAVLink off TCP and UDP sockets and recovered ÇARGE capsule logs off a third port, attributes everything to a tenant and device, deduplicates, and publishes to Kafka keyed by device — 68 tests green, including two against a real broker in a container. Sustained ingest measured at **1.44 M frames/s (46.9 MB/s)** across 32 simultaneous connections, nothing shed and reads never paused.
 
 Under load it applies the lossless remedy first: above 60 % pressure a TCP channel stops reading and lets TCP's own flow control slow the sender, and only above that does it shed — bulk diagnostics first, heartbeats never. UDP gets no such option and says so: with no back channel, declining to read just moves the loss into the kernel where it cannot be counted, so that transport keeps reading and sheds explicitly. Reasoning in [ADR-0003](docs/adr/ADR-0003-backpressure-and-shedding.md).
 

@@ -186,6 +186,15 @@ pass.**
   suspect the harness first.
 - Logback defaults to DEBUG with no config, putting Netty's startup probe and per-frame logging on
   the ingest path. `logback.xml` (main) and `logback-test.xml` (test) pin the levels.
+- **Deduplication never touches CRITICAL traffic** and is **opt-in**. MAVLink's sequence is 8-bit
+  and wraps every ~5 s, so the key must include a payload digest and the window must stay inside the
+  wrap; even then, near-identical heartbeats would collide. Dedup runs *after* admission and must
+  `release()` on suppression, or pressure leaks and the gateway wedges shut. Redis was rejected for
+  the per-message path — ADR-0004.
+- **A separate port per protocol, not sniffing.** MAVLink and HK are distinguishable by magic
+  bytes, but a MAVLink link routinely opens with a text boot banner, so first-frame guessing
+  misclassifies it. HK uploads have no system id (device = link) and rely on `endOfStream` to tell a
+  torn tail from a frame in transit.
 
 ## Invariants
 
@@ -234,11 +243,11 @@ table / screenshot) — the repo stays presentable at any moment.
   differential tests against two Python oracles, table-driven CRC + JMH. The real 36 KB SITL
   recording decodes to 1058 frames, 0 checksum errors, 0 unknown messages, 119 bytes of boot banner
   resynced; 568 MB/s.
-- **Phase 2 🚧** — ingest gateway. Done: Netty TCP + UDP, admission control (read-pause then
-  priority shedding), tenant/device attribution, Kafka publisher (idempotent, device-keyed),
-  Micrometer binding, ADR-0003, Testcontainers integration tests, load measurement
-  (1.44 M frames/s across 32 connections). Remaining: **dedup and the HK ingest path.**
-- **Phase 3** — TimescaleDB schema + query API, QuestDB comparison → ADR-0004
+- **Phase 2 ✅** — ingest gateway: Netty TCP + UDP + a third port for ÇARGE capsule log uploads,
+  admission control (read-pause then priority shedding), tenant/device attribution, in-process
+  deduplication, Kafka publisher (idempotent, device-keyed), Micrometer binding, ADR-0003/0004,
+  Testcontainers integration tests. Measured 1.44 M frames/s across 32 connections.
+- **Phase 3** — TimescaleDB schema + query API, QuestDB comparison → ADR-0005
 - **Phase 4** — Kafka Streams windowing, rules engine (debounce/hysteresis), alert state machine
 - **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log
 - **Phase 6** — OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind

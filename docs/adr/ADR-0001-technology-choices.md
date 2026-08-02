@@ -31,7 +31,7 @@ SÜRÜ ingests high-volume telemetry from UAV and IoT fleets, processes and stor
 
 **Warnings are errors (`-Werror -Xlint:all`).** The counterpart of the `-Wall -Wextra -Wshadow -Wconversion` discipline in the ÇARGE firmware. The codebase does not accumulate warnings.
 
-**TimescaleDB rather than QuestDB — for now.** QuestDB ingests 6–13× faster. But the platform's relational data (tenants, devices, rules, users, audit) already wants PostgreSQL, and keeping one engine preserves JOIN flexibility. **This decision is deliberately provisional: phase 3 measures both and the result is written up in ADR-0004.** The choice was not made without measurement — the measurement was deferred, and that is stated rather than hidden.
+**TimescaleDB rather than QuestDB — for now.** QuestDB ingests 6–13× faster. But the platform's relational data (tenants, devices, rules, users, audit) already wants PostgreSQL, and keeping one engine preserves JOIN flexibility. **This decision is deliberately provisional: phase 3 measures both and the result is written up in ADR-0005.** The choice was not made without measurement — the measurement was deferred, and that is stated rather than hidden.
 
 **Kafka in KRaft mode.** ZooKeeper-free deployment is the default now; there is no reason to operate two distributed systems.
 
