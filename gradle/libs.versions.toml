@@ -4,9 +4,21 @@
 [versions]
 java = "25"
 
+# phase 2 — ingest gateway
+netty = "4.2.16.Final"
+kafka = "4.3.1"
+micrometer = "1.17.0"
+lettuce = "7.6.0.RELEASE"
+# slf4j 2.1.x and logback 1.6.x are paired, but 2.1.x is still alpha — Maven Central's
+# <release> field reports the alpha, so it is pinned deliberately to the stable pair.
+slf4j = "2.0.18"
+logback = "1.5.38"
+
 # test
 junit = "6.0.3"
 assertj = "3.27.3"
+testcontainers = "2.0.5"
+awaitility = "4.3.0"
 # 1.4.1 is the first release whose bundled ASM understands Java 25 class files
 # (major version 69). On 1.4.0 the importer silently skips every class and each
 # rule fails with "failed to check any classes" — which reads like a rule
@@ -22,6 +34,35 @@ archunit = "1.4.2"
 # Phase 2+: netty, kafka, spring-boot, testcontainers.
 
 [libraries]
+netty-bom = { module = "io.netty:netty-bom", version.ref = "netty" }
+netty-transport = { module = "io.netty:netty-transport" }
+netty-handler = { module = "io.netty:netty-handler" }
+netty-buffer = { module = "io.netty:netty-buffer" }
+
+kafka-clients = { module = "org.apache.kafka:kafka-clients", version.ref = "kafka" }
+
+micrometer-bom = { module = "io.micrometer:micrometer-bom", version.ref = "micrometer" }
+micrometer-core = { module = "io.micrometer:micrometer-core" }
+micrometer-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
+
+lettuce-core = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
+
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# Testcontainers' JUnit extension is deliberately NOT used: like archunit-junit5 it binds
+# to the JUnit Platform version, and this project is on Platform 6. Containers are started
+# and stopped from @BeforeAll/@AfterAll against the core API instead.
+#
+# Note the module names: Testcontainers 2.x renamed every module to a "testcontainers-"
+# prefix. The old coordinates (org.testcontainers:kafka) stop at 1.21.4, and asking the 2.x
+# BOM for them fails with "Could not find org.testcontainers:kafka:" — no version, because
+# the BOM manages the new name only.
+testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
+testcontainers-core = { module = "org.testcontainers:testcontainers" }
+testcontainers-kafka = { module = "org.testcontainers:testcontainers-kafka" }
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
+
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

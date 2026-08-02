@@ -24,4 +24,5 @@ dependencyResolutionManagement {
 //   Phase 4 → stream-processor
 //   Phase 6 → archiver
 include("protocol")
+include("ingest-gateway")
 include("benchmarks")
