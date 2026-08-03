@@ -31,7 +31,7 @@ That means every design decision here is answerable from both ends of the link:
 | 0 | Build infrastructure, convention plugins, compose stack, CI, ADRs, CRC core | ✅ done |
 | 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
 | 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ✅ done |
-| 3 | TimescaleDB schema, continuous aggregates, query API | ⬜ |
+| 3 | TimescaleDB schema, continuous aggregates, query API | 🚧 schema, bulk writer and Kafka consumer done; query API and the 100M-row measurement remain |
 | 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ⬜ |
 | 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
 | 6 | OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind | ⬜ |
@@ -52,6 +52,10 @@ Two more corrections worth recording, since both were beliefs the work overturne
 > **The shedding thresholds were backwards in the first draft** — bulk discarded at 50 % while reads paused at 80 %, throwing data away while a lossless option sat untried. A test now pins the invariant that a pressure band must exist where the gateway has stopped reading and is still losing nothing.
 
 > **The first load measurement was wrong by a factor of 850.** It reported 1,692 frames/s for a gateway wrapping a decoder already measured at 16.6 M frames/s — a gap far too large to be real. The cause was the test's own publisher collecting into a `CopyOnWriteArrayList`, whose `add` copies the whole array: the harness was the bottleneck, not the system. Details in [`docs/benchmarks.md`](docs/benchmarks.md).
+
+**Phase 3, so far:** telemetry now lands in TimescaleDB. A narrow measurement table with columnar compression segmented by `(tenant, device, metric)`, hierarchical minute-and-hour rollups, and tiered retention — verified against a real TimescaleDB 2.29 rather than by trusting that the SQL ran, because a table can fail to be a hypertable while every statement succeeds. Bulk loading uses `COPY`, measured at **11.3× batched `INSERT`** (122,619 rows/s against 10,879). The consumer commits Kafka offsets *after* the database transaction, so a crash replays a batch rather than losing one; a test induces a write failure and asserts the records come back.
+
+> **A timestamp field was never wall clock.** All three ingest handlers were putting `System.nanoTime()` into a field named `receivedAtEpochNanos`. That counts from an arbitrary origin and is meaningful only as a difference — used as a timestamp it produces a number that looks like nanoseconds since 1970 and is not. Nothing had noticed because nothing had yet written it to a `TIMESTAMPTZ` column; rows would have landed around 1970 or 2262 depending on the machine's uptime.
 
 Three findings from phase 1 are written up rather than quietly fixed, because each one was a belief that measurement or testing overturned:
 
