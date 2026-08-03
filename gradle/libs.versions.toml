@@ -16,6 +16,10 @@ micrometer = "1.17.0"
 slf4j = "2.0.18"
 logback = "1.5.38"
 
+# phase 3 — control plane
+springBoot = "4.1.0"
+springdoc = "3.1.0"
+
 # phase 3 — storage
 flyway = "13.1.0"
 postgresql = "42.7.13"
@@ -84,8 +88,12 @@ assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 # tightly coupled to the JUnit Platform version, the core API is not.
 archunit = { module = "com.tngtech.archunit:archunit", version.ref = "archunit" }
 
+springdoc-webmvc = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
+
 [plugins]
 jmh = { id = "me.champeau.jmh", version = "0.7.3" }
+spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
+spring-dependency-management = { id = "io.spring.dependency-management", version = "1.1.7" }
 
 [bundles]
 testing = ["junit-jupiter", "assertj-core", "archunit"]

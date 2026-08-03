@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: suru-control-plane
+  datasource:
+    url: ${SURU_DB_URL:jdbc:postgresql://localhost:5432/suru}
+    username: ${SURU_DB_USER:suru}
+    password: ${SURU_DB_PASSWORD:suru_dev_only}
+    hikari:
+      maximum-pool-size: 16
+      # A read API that cannot get a connection should say so quickly rather than hold the
+      # request thread until something else times out.
+      connection-timeout: 3000
+  # The schema is applied by the storage module as a deployment step, not by every API instance
+  # on startup — several restarting at once would otherwise race to migrate the same database.
+  flyway:
+    enabled: false
+
+server:
+  port: ${SURU_API_PORT:8080}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui
+
+logging:
+  level:
+    io.github.mustaffadnc.suru: INFO

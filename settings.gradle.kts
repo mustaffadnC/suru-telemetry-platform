@@ -26,4 +26,5 @@ dependencyResolutionManagement {
 include("protocol")
 include("ingest-gateway")
 include("storage")
+include("control-plane")
 include("benchmarks")
