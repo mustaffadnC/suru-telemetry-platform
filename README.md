@@ -6,6 +6,12 @@
 
 > 🇹🇷 *Türkçe özet aşağıda.*
 
+> **Built with AI coding tools.** Much of the code here was scaffolded and iterated using Claude
+> Code. The protocol research, the architectural decisions, and the benchmark methodology — what
+> gets measured, against which reference, and what counts as done — are mine. Every number in this
+> README comes from a run I set up and checked; the "beliefs overturned" section below is what that
+> checking produced.
+
 ## Why this exists
 
 Most telemetry backends on GitHub wrap a REST API around a database and call it a platform. SÜRÜ is built the other way round: it starts at the wire.
@@ -18,7 +24,7 @@ That means every design decision here is answerable from both ends of the link:
 - **Real telemetry, not a fake generator.** Load comes from ArduPilot SITL instances flying real missions, and from recorded byte streams captured off an actual link.
 - **Verified against an independent implementation.** The Java decoder is differential-tested against the reference Python decoder written for the firmware.
 
-## Status — Phase 1 (protocol core) ✅
+## Status — Phase 2 (ingest gateway) ✅
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -122,7 +128,9 @@ Bu yüzden her tasarım kararı bağlantının iki ucundan da savunulabilir. Ör
 
 Yük sahte veri üretecinden değil, gerçek görev uçan ArduPilot SITL örneklerinden ve gerçek bir hattan kaydedilmiş byte akışlarından geliyor. Java çözücü, firmware için yazılmış bağımsız Python referans çözücüye karşı differential test ediliyor.
 
-Durum: **Faz 0 (iskele)** sürüyor. Yukarıdaki tablodaki hiçbir madde, fazı tamamlanıp ölçümleri `docs/benchmarks.md`'ye girmeden "çalışıyor" sayılmıyor.
+Durum: **Faz 0–2 tamamlandı** (protokol çekirdeği + ingest gateway). Faz 1'de 36 KB'lık kayıtlı SITL akışı **1058 çerçeveye, sıfır sağlama hatası ve sıfır bilinmeyen mesajla** çözülüyor; çözme hızı **568 MB/s**. Faz 2'de gateway 32 eşzamanlı bağlantı üzerinden **1.44 M çerçeve/s (46.9 MB/s)** sürdürülebilir ingest ölçtü, hiçbir şey düşürülmeden — **68 test yeşil**, ikisi konteynerdeki gerçek broker'a karşı.
+
+Yukarıdaki tablodaki hiçbir madde, fazı tamamlanıp ölçümleri `docs/benchmarks.md`'ye girmeden "çalışıyor" sayılmıyor.
 
 ## License
 
