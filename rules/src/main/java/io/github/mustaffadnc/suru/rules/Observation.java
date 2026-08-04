@@ -97,6 +97,30 @@ public record Observation(
     }
 
     /**
+     * This observation with several metrics updated at once.
+     *
+     * <p><b>An empty update still marks the device as heard from.</b> Most frames carry nothing
+     * this platform stores — heartbeats above all — and a heartbeat is the clearest possible
+     * evidence that a device is alive. Treating "produced no metrics" as "did not arrive" would
+     * make {@link Staleness} fire on vehicles that are transmitting their liveness signal
+     * perfectly.
+     *
+     * @param updates metric names and their new values
+     * @param sampleTime when the sample was taken
+     * @return a new observation
+     */
+    public Observation withAll(Map<String, Double> updates, Instant sampleTime) {
+        Instant seen = sampleTime.isAfter(lastSeen) ? sampleTime : lastSeen;
+        Instant evaluatedAt = sampleTime.isAfter(at) ? sampleTime : at;
+        if (updates.isEmpty()) {
+            return new Observation(tenantId, deviceId, metrics, seen, evaluatedAt);
+        }
+        Map<String, Double> merged = new HashMap<>(metrics);
+        merged.putAll(updates);
+        return new Observation(tenantId, deviceId, merged, seen, evaluatedAt);
+    }
+
+    /**
      * This observation re-evaluated at a later instant, with no new data.
      *
      * <p>This is how a timer asks "has anything changed by now" — the metrics stand, but the

@@ -25,6 +25,14 @@ flyway = "13.1.0"
 postgresql = "42.7.13"
 hikari = "7.1.0"
 
+# phase 4 — stream processor
+# Jackson is used for the state stores and the alert topic. The choice is unmeasured: it was
+# taken for inspectability — a changelog and an alert topic that can be read with
+# kafka-console-consumer are worth a lot during an incident — and not because it was shown to
+# be fast enough. If the processor ever becomes the bottleneck, phase 6's load work is where a
+# hand-written serde gets compared against it rather than assumed to be better.
+jackson = "2.20.0"
+
 # test
 junit = "6.0.3"
 assertj = "3.27.3"
@@ -82,6 +90,14 @@ awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" 
 # No QuestDB client dependency. Its line protocol is plain text over a TCP socket, so the
 # comparison writes it directly — org.questdb:questdb ships the server and carries no Sender,
 # and org.questdb:questdb-client is a stale 1.x artifact that does not track the server.
+
+kafka-streams = { module = "org.apache.kafka:kafka-streams", version.ref = "kafka" }
+# TopologyTestDriver runs a topology in-process with a clock the test drives. That matters more
+# here than usual: the telemetry-loss rule fires on wall-clock punctuation, and the driver's
+# advanceWallClockTime is the only way to test it without sleeping for the timeout.
+kafka-streams-test-utils = { module = "org.apache.kafka:kafka-streams-test-utils", version.ref = "kafka" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-datatype-jsr310", version.ref = "jackson" }
 
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
