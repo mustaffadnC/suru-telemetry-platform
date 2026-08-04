@@ -326,7 +326,14 @@ table / screenshot) — the repo stays presentable at any moment.
   webhook notifier with bounded retries and jittered backoff. All three scenarios end to end;
   alert delivery measured at 8.3 ms p50 → ADR-0006. **SMTP delivery is not written** — it is a
   second `AlertSink` implementation and nothing else depends on it.
-- **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log
+- **Phase 5 🚧** — command path and security. Done: `V5`/`V6` schema (command, transactional
+  outbox, append-only audit log enforced by statement-level triggers, partial unique index for ACK
+  matching), `CommandRepository` writing command + outbox + audit in one JDBC transaction,
+  `OutboxRelay` with `SKIP LOCKED` publishing before marking, command REST API with tenant
+  isolation and audited refusals, MAVLink encoder + COMMAND_LONG/COMMAND_ACK, gateway
+  `CommandDispatcher`. **Remaining: Keycloak OIDC (one class — `PrincipalResolver`), wiring the
+  dispatcher to the Kafka topic and the ACK back to the control plane, and the SITL end-to-end
+  demo.**
 - **Phase 6** — OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind
 - **Phase 7** — React console, demo script, README + GIF
 
