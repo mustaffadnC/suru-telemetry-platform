@@ -39,4 +39,4 @@ SÜRÜ ingests high-volume telemetry from UAV and IoT fleets, processes and stor
 
 - This is the first Java project in the portfolio, so phases 0–1 are deliberately plain Java with no Spring: the language and toolchain settle before a framework is added on top.
 - The Gradle choice may need explaining when applying to Maven-heavy shops; this ADR is that explanation.
-- The TimescaleDB decision is explicitly marked provisional. ADR-0004 will either confirm or overturn it.
+- The TimescaleDB decision was explicitly marked provisional. It has since been measured and confirmed in [ADR-0005](ADR-0005-timescaledb-vs-questdb.md) — QuestDB does ingest 15.6× faster, and that turned out not to be the number that decides this workload.

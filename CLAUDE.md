@@ -196,6 +196,33 @@ pass.**
   misclassifies it. HK uploads have no system id (device = link) and rely on `endOfStream` to tell a
   torn tail from a frame in transit.
 
+### Storage and query (phase 3)
+
+- **A continuous aggregate does not inherit the raw table's indexes.** It is addressed as a view but
+  backed by its own hypertable. TimescaleDB auto-indexes one column per `GROUP BY`
+  — `(tenant_id, bucket)`, `(device_id, bucket)`, `(metric, bucket)` — so a query filtering all
+  three uses one and filters the rest, and its cost tracks total rollup size rather than the series
+  asked for. `V4__rollup_indexes.sql` adds the composite; measured 4.8× at 10M rows, and at 100M it
+  had made the minute rollup *slower than scanning raw*.
+- **`materialized_only` defaults to TRUE on 2.29.** Real-time aggregation is not in play unless
+  switched on. A widely-documented explanation that does not apply to the version in hand.
+- **`add_columnstore_policy` is a procedure** (`CALL`, not `SELECT`); retention and cagg policies are
+  functions. The columnstore policy is still recorded as `proc_name = 'policy_compression'`.
+- Continuous aggregates and policy functions **cannot run inside a transaction** — those migrations
+  carry a sibling `.conf` with `executeInTransaction=false`.
+- **Compression made reads faster, not slower** (p95 1.6 ms → 0.7 ms): segmented rows are contiguous
+  and 26× smaller, so far fewer pages are touched. Do not assume decompression is a read tax here.
+- Offsets are committed **after** the database write, so a crash replays rather than loses. The
+  writer tolerates that because a replayed row is byte-identical; only `samples` moves.
+- **Device ids contain `/`** (`link/sysN`), so they are query parameters in the API, never path
+  segments — Spring rejects an encoded slash.
+- Benchmarks are gated behind `-Dsuru.dbbench=true` and **must run one engine at a time**; two
+  databases on one disk measure contention.
+- **QuestDB reserves the table name `telemetry`** for its own internal telemetry. Creating one is
+  silently accepted, `tables()` then lists nothing, and the line protocol logs "could not get table
+  writer" per row while a handful leak through — 9 rows of 1000, and three million error lines. The
+  comparison uses `suru_telemetry`.
+
 ## Invariants
 
 - **`protocol` has no runtime dependencies.** Netty, Kafka and Spring may not leak in; the rule is
@@ -247,7 +274,10 @@ table / screenshot) — the repo stays presentable at any moment.
   admission control (read-pause then priority shedding), tenant/device attribution, in-process
   deduplication, Kafka publisher (idempotent, device-keyed), Micrometer binding, ADR-0003/0004,
   Testcontainers integration tests. Measured 1.44 M frames/s across 32 connections.
-- **Phase 3** — TimescaleDB schema + query API, QuestDB comparison → ADR-0005
+- **Phase 3 ✅** — storage and query: TimescaleDB schema (hypertable, columnstore, hierarchical
+  rollups, tiered retention), `COPY` bulk writer (11.3× batched INSERT), Kafka consumer with
+  offset-after-write, Spring Boot query API choosing its own resolution, 100M-row measurement, and
+  the QuestDB comparison → ADR-0005.
 - **Phase 4** — Kafka Streams windowing, rules engine (debounce/hysteresis), alert state machine
 - **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log
 - **Phase 6** — OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind

@@ -24,14 +24,14 @@ That means every design decision here is answerable from both ends of the link:
 - **Real telemetry, not a fake generator.** Load comes from ArduPilot SITL instances flying real missions, and from recorded byte streams captured off an actual link.
 - **Verified against an independent implementation.** The Java decoder is differential-tested against the reference Python decoder written for the firmware.
 
-## Status — Phase 2 (ingest gateway) ✅
+## Status — Phase 3 (storage and query) ✅
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Build infrastructure, convention plugins, compose stack, CI, ADRs, CRC core | ✅ done |
 | 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
 | 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ✅ done |
-| 3 | TimescaleDB schema, continuous aggregates, query API | 🚧 schema, bulk writer and Kafka consumer done; query API and the 100M-row measurement remain |
+| 3 | TimescaleDB schema, continuous aggregates, query API, 100M-row measurement | ✅ done |
 | 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ⬜ |
 | 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
 | 6 | OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind | ⬜ |
@@ -53,7 +53,11 @@ Two more corrections worth recording, since both were beliefs the work overturne
 
 > **The first load measurement was wrong by a factor of 850.** It reported 1,692 frames/s for a gateway wrapping a decoder already measured at 16.6 M frames/s — a gap far too large to be real. The cause was the test's own publisher collecting into a `CopyOnWriteArrayList`, whose `add` copies the whole array: the harness was the bottleneck, not the system. Details in [`docs/benchmarks.md`](docs/benchmarks.md).
 
-**Phase 3, so far:** telemetry now lands in TimescaleDB. A narrow measurement table with columnar compression segmented by `(tenant, device, metric)`, hierarchical minute-and-hour rollups, and tiered retention — verified against a real TimescaleDB 2.29 rather than by trusting that the SQL ran, because a table can fail to be a hypertable while every statement succeeds. Bulk loading uses `COPY`, measured at **11.3× batched `INSERT`** (122,619 rows/s against 10,879). The consumer commits Kafka offsets *after* the database transaction, so a crash replays a batch rather than losing one; a test induces a write failure and asserts the records come back.
+**Phase 3, verified:** telemetry lands in TimescaleDB and comes back out through a query API. A narrow measurement table with columnar compression segmented by `(tenant, device, metric)`, hierarchical minute-and-hour rollups, and tiered retention — verified against a real TimescaleDB 2.29 rather than by trusting that the SQL ran, because a table can fail to be a hypertable while every statement succeeds. Bulk loading uses `COPY`, measured at **11.3× batched `INSERT`** (122,619 rows/s against 10,879). The consumer commits Kafka offsets *after* the database transaction, so a crash replays a batch rather than losing one; a test induces a write failure and asserts the records come back. The REST API picks its own resolution from the requested range, so a month-wide chart reads the hourly rollup and a live view reads raw.
+
+**Measured at a hundred million rows:** ingest **102,778 rows/s** holding flat from the first batch to the last, **26.7× compression** (22.46 GB → 0.84 GB), and a point query at **1.0 ms p95**. Compression made reads *faster*, not slower — p95 roughly halved, because segmented rows are contiguous and the query was never CPU-bound. QuestDB was loaded with the same 100M rows for comparison and ingests **15.6× faster**; it also stores the data 4.8× larger and answers a point query 19× slower, which is why [ADR-0005](docs/adr/ADR-0005-timescaledb-vs-questdb.md) keeps TimescaleDB and states the ingest rate at which that should be revisited.
+
+> **The minute rollup was slower than the raw data it summarises** — 70.9 ms p95 against 1.0 ms. The first explanation, real-time aggregation, was wrong: `materialized_only` defaults to *true* on 2.29, and a test asserting otherwise is what killed the hypothesis. The real cause was that **continuous aggregates do not inherit the raw table's indexes** — they are addressed as views but backed by their own hypertables, and TimescaleDB indexes them one column per `GROUP BY` rather than compositely. Migration `V4` adds the composite index: **70.9 ms → 2.3 ms**, and the gain grows with table size, which is the prediction that distinguished the right diagnosis from the wrong one.
 
 > **A timestamp field was never wall clock.** All three ingest handlers were putting `System.nanoTime()` into a field named `receivedAtEpochNanos`. That counts from an arbitrary origin and is meaningful only as a difference — used as a timestamp it produces a number that looks like nanoseconds since 1970 and is not. Nothing had noticed because nothing had yet written it to a `TIMESTAMPTZ` column; rows would have landed around 1970 or 2262 depending on the machine's uptime.
 
@@ -132,7 +136,11 @@ Bu yüzden her tasarım kararı bağlantının iki ucundan da savunulabilir. Ör
 
 Yük sahte veri üretecinden değil, gerçek görev uçan ArduPilot SITL örneklerinden ve gerçek bir hattan kaydedilmiş byte akışlarından geliyor. Java çözücü, firmware için yazılmış bağımsız Python referans çözücüye karşı differential test ediliyor.
 
-Durum: **Faz 0–2 tamamlandı** (protokol çekirdeği + ingest gateway). Faz 1'de 36 KB'lık kayıtlı SITL akışı **1058 çerçeveye, sıfır sağlama hatası ve sıfır bilinmeyen mesajla** çözülüyor; çözme hızı **568 MB/s**. Faz 2'de gateway 32 eşzamanlı bağlantı üzerinden **1.44 M çerçeve/s (46.9 MB/s)** sürdürülebilir ingest ölçtü, hiçbir şey düşürülmeden — **68 test yeşil**, ikisi konteynerdeki gerçek broker'a karşı.
+Durum: **Faz 0–3 tamamlandı** (protokol çekirdeği + ingest gateway + depolama ve sorgu). Faz 1'de 36 KB'lık kayıtlı SITL akışı **1058 çerçeveye, sıfır sağlama hatası ve sıfır bilinmeyen mesajla** çözülüyor; çözme hızı **568 MB/s**. Faz 2'de gateway 32 eşzamanlı bağlantı üzerinden **1.44 M çerçeve/s (46.9 MB/s)** sürdürülebilir ingest ölçtü, hiçbir şey düşürülmeden — ikisi konteynerdeki gerçek broker'a karşı olmak üzere testler yeşil.
+
+Faz 3'te **100 milyon satır** gerçek bir TimescaleDB'ye yazıldı: **102.778 satır/s** ingest, **26.7× sıkıştırma** (22.46 GB → 0.84 GB) ve **1.0 ms p95** nokta sorgusu. Sıkıştırma okumayı yavaşlatmadı, **hızlandırdı** — sorgu hiçbir zaman CPU-bağımlı değildi, sıkıştırılmış satırlar bitişik olduğu için çok daha az sayfa okunuyor. Aynı 100M satır QuestDB'ye de yüklendi: QuestDB **15.6× hızlı yazıyor**, buna karşılık aynı veriyi 4.8× büyük saklıyor ve nokta sorgusunu 19× yavaş yanıtlıyor. Karar ve hangi ingest hızında yeniden gözden geçirilmesi gerektiği [ADR-0005](docs/adr/ADR-0005-timescaledb-vs-questdb.md)'te.
+
+Yol boyunca çıkan en öğretici hata: **dakikalık rollup, özetlediği ham veriden yavaştı** (70.9 ms'e karşı 1.0 ms). İlk açıklamam yanlıştı; gerçek sebep, **continuous aggregate'lerin ham tablonun indekslerini miras almaması**. `V4` migration'ı kompozit indeksi ekliyor: **70.9 ms → 2.3 ms**.
 
 Yukarıdaki tablodaki hiçbir madde, fazı tamamlanıp ölçümleri `docs/benchmarks.md`'ye girmeden "çalışıyor" sayılmıyor.
 
