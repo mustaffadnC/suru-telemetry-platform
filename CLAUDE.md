@@ -249,6 +249,17 @@ pass.**
 - **A false `HK\x01` header does not merely desynchronise — it parses.** The following frame's own
   magic supplies a plausible type and length, so a frame-shaped span is read and only the checksum
   rejects it. Concrete reason recovery advances one byte.
+- **MAV_CMD ids and message ids are separate namespaces sharing small integers.** MAV_CMD 400 is
+  arm/disarm and rides *inside* a COMMAND_LONG's `command` field at offset 28; message id 400 is an
+  unrelated 254-byte message. The dialect answers for both, so nothing downstream catches the
+  mix-up — the frame is structurally valid and means something else.
+- **COMMAND_ACK carries no correlation id** (`command`, `result`, `progress`, `result_param2`,
+  target ids). An answer can only be matched on `(device, MAV_CMD id)`, and since ARM and DISARM
+  share MAV_CMD 400 that is ambiguous unless only one is outstanding. V6's partial unique index
+  enforces exactly that.
+- **MAVLink wire order is descending field size, not declaration order.** COMMAND_LONG declares
+  `command` third and transmits it at offset 28, after all seven floats. COMMAND_ACK is 3 bytes
+  minimum and 10 with extensions, so read its fields by offset rather than unpacking a struct.
 - **MAVLink v2 truncation stops at one byte, never zero.** "Trailing zeros are truncated" reads as
   "remove them all"; it is not. In the 1058-frame SITL recording **no** frame has `len=0` and eight
   carry a single zero byte — a VFR_HUD whose payload truncates to nothing is still sent as `len=1`.
