@@ -268,6 +268,9 @@ class AlertPipelineIT {
                         topics.alerts(),
                         Duration.ofSeconds(1),
                         Duration.ofMinutes(1),
+                        Duration.ofMinutes(5),
+                         64,
+                         8,
                         false);
 
         KafkaStreams streams =

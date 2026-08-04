@@ -6,6 +6,8 @@ import io.github.mustaffadnc.suru.protocol.mavlink.MavlinkPayload;
 import io.github.mustaffadnc.suru.rules.Alert;
 import io.github.mustaffadnc.suru.rules.AlertState;
 import io.github.mustaffadnc.suru.rules.AlertStateStore;
+import io.github.mustaffadnc.suru.rules.DerivedMetrics;
+import io.github.mustaffadnc.suru.rules.DeviceWindows;
 import io.github.mustaffadnc.suru.rules.Observation;
 import io.github.mustaffadnc.suru.rules.RuleEngine;
 import java.nio.charset.StandardCharsets;
@@ -13,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -73,13 +76,26 @@ public final class RuleProcessor implements Processor<String, byte[], String, Al
     /** Name of the store holding each rule's phase per device. */
     public static final String ALERT_STATE_STORE = "alert-state";
 
+    /** Name of the store holding rolling windows for metrics any rule needs a trend for. */
+    public static final String WINDOW_STORE = "metric-windows";
+
     private final RuleEngine engine;
     private final Duration punctuationInterval;
     private final Duration catchUpThreshold;
+    private final Duration windowSpan;
+    private final int windowCapacity;
+    private final int minimumWindowSamples;
+
+    /**
+     * Base metrics needing a window, read out of the rules rather than configured separately —
+     * a trend rule therefore cannot be deployed without its window.
+     */
+    private final Set<String> windowedMetrics;
 
     private ProcessorContext<String, Alert> context;
     private KeyValueStore<String, Observation> deviceStates;
     private KeyValueStore<String, AlertState> alertStates;
+    private KeyValueStore<String, DeviceWindows> metricWindows;
     private AlertStateStore alertStateAdapter;
 
     private long recordsSincePunctuation;
@@ -95,10 +111,19 @@ public final class RuleProcessor implements Processor<String, byte[], String, Al
      *     processor is considered to be replaying rather than watching an outage
      */
     public RuleProcessor(
-            RuleEngine engine, Duration punctuationInterval, Duration catchUpThreshold) {
+            RuleEngine engine,
+            Duration punctuationInterval,
+            Duration catchUpThreshold,
+            Duration windowSpan,
+            int windowCapacity,
+            int minimumWindowSamples) {
         this.engine = engine;
         this.punctuationInterval = punctuationInterval;
         this.catchUpThreshold = catchUpThreshold;
+        this.windowSpan = windowSpan;
+        this.windowCapacity = windowCapacity;
+        this.minimumWindowSamples = minimumWindowSamples;
+        this.windowedMetrics = DerivedMetrics.windowedMetricsOf(engine);
     }
 
     @Override
@@ -106,6 +131,7 @@ public final class RuleProcessor implements Processor<String, byte[], String, Al
         this.context = context;
         this.deviceStates = context.getStateStore(DEVICE_STATE_STORE);
         this.alertStates = context.getStateStore(ALERT_STATE_STORE);
+        this.metricWindows = context.getStateStore(WINDOW_STORE);
         this.alertStateAdapter =
                 new AlertStateStore() {
                     @Override
@@ -139,6 +165,7 @@ public final class RuleProcessor implements Processor<String, byte[], String, Al
         Map<String, Double> updates = new HashMap<>();
         MavlinkMetrics.extract(
                 Integer.parseInt(messageId), MavlinkPayload.of(record.value()), updates::put);
+        updateWindows(key, updates, sampleTime);
 
         Observation previous = deviceStates.get(key);
         if (previous == null) {
@@ -159,6 +186,37 @@ public final class RuleProcessor implements Processor<String, byte[], String, Al
             counters.alertsFromRecords++;
             context.forward(new Record<>(alert.key(), alert, record.timestamp()));
         }
+    }
+
+    /**
+     * Folds any windowed metrics in this record into the device's windows, and adds every derived
+     * statistic to the update so the rules see them as ordinary metrics.
+     *
+     * <p>Nothing happens when no rule asks for a trend, which is the common case: the window store
+     * stays empty and the record costs one set lookup.
+     */
+    private void updateWindows(String key, Map<String, Double> updates, Instant sampleTime) {
+        if (windowedMetrics.isEmpty()) {
+            return;
+        }
+        DeviceWindows windows = metricWindows.get(key);
+        if (windows == null) {
+            windows = DeviceWindows.empty();
+        }
+        boolean changed = false;
+        for (String metric : windowedMetrics) {
+            Double value = updates.get(metric);
+            if (value != null) {
+                windows = windows.with(metric, sampleTime, value, windowSpan, windowCapacity);
+                changed = true;
+            }
+        }
+        if (changed) {
+            metricWindows.put(key, windows);
+        }
+        // Derived values are added even when this record carried none of the windowed metrics, so
+        // a device's trend stays visible to rules across the messages that do not contain it.
+        updates.putAll(windows.derivedMetrics(minimumWindowSamples));
     }
 
     /** Evaluates every known device against the current wall clock. */

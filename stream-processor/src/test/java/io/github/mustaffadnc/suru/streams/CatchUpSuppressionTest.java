@@ -76,6 +76,9 @@ class CatchUpSuppressionTest {
                         ALERT_TOPIC,
                         Duration.ofSeconds(1),
                         Duration.ofMinutes(1),
+                        Duration.ofMinutes(5),
+                         64,
+                         8,
                         false);
 
         driver = new TopologyTestDriver(AlertTopology.build(silenceOnly(), config), props, NOW);

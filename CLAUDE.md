@@ -273,6 +273,11 @@ pass.**
   however far it moves the clock — advancing 20 s against a 1 s schedule is one tick, not twenty.
   Verified with a probe rather than assumed. Tests that jump exercise a cadence production never
   has and hide anything depending on the previous tick.
+- **Least-squares regression is not outlier-robust, and "moves by 1/n" is wrong.** That intuition
+  holds for the *mean*; a regression weights samples by distance from the mean time, so an outlier
+  near either end has high leverage. On a steady −1 %/min series with one dropout: n=4 outlier at
+  the end → −9.10 (endpoint method −10.00, so barely better); n=4 in the middle → **+1.90**, the
+  wrong sign; n=11 at the end → −1.91. The defence is a minimum sample count, not the estimator.
 - **A latency distribution with no spread is not a latency distribution.** p95 ≈ p99 ≈ max means the
   samples are not independent — usually a burst published at once and then drained, where the last
   sample is charged for everything ahead of it. Companion tell to the phase-2 850× bug: both times
@@ -301,8 +306,8 @@ table / screenshot) — the repo stays presentable at any moment.
 - **Phase 4 🚧** — rules engine and alerting. Done: dependency-free `rules` module (threshold,
   geofence, staleness; hysteresis in the condition, debounce in a four-phase state machine),
   Kafka Streams topology over changelog-backed stores, all three scenarios end to end, alert
-  latency measured → ADR-0006. Remaining: windowed aggregation (min/max/avg/stddev), rate-of-change
-  conditions, and the webhook/e-mail notifier.
+  latency measured → ADR-0006, rolling windows exposing min/max/mean/stddev/slope as derived
+  metrics so trend rules are ordinary thresholds. Remaining: the webhook/e-mail notifier.
 - **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log
 - **Phase 6** — OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind
 - **Phase 7** — React console, demo script, README + GIF

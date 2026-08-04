@@ -2,6 +2,8 @@ package io.github.mustaffadnc.suru.streams;
 
 import io.github.mustaffadnc.suru.rules.Alert;
 import io.github.mustaffadnc.suru.rules.AlertState;
+import io.github.mustaffadnc.suru.rules.DerivedMetrics;
+import io.github.mustaffadnc.suru.rules.DeviceWindows;
 import io.github.mustaffadnc.suru.rules.Observation;
 import io.github.mustaffadnc.suru.rules.RuleEngine;
 import java.time.Duration;
@@ -52,6 +54,9 @@ public final class AlertTopology {
             String alertTopic,
             Duration punctuationInterval,
             Duration catchUpThreshold,
+            Duration windowSpan,
+            int windowCapacity,
+            int minimumWindowSamples,
             boolean persistentStores) {
 
         /** Validates the topics and durations. */
@@ -60,16 +65,24 @@ public final class AlertTopology {
             Objects.requireNonNull(alertTopic, "alertTopic");
             Objects.requireNonNull(punctuationInterval, "punctuationInterval");
             Objects.requireNonNull(catchUpThreshold, "catchUpThreshold");
+            Objects.requireNonNull(windowSpan, "windowSpan");
             if (punctuationInterval.isNegative() || punctuationInterval.isZero()) {
                 throw new IllegalArgumentException("punctuationInterval must be positive");
             }
         }
 
         /**
-         * Production defaults: RocksDB stores, silence checked every second.
+         * Production defaults: RocksDB stores, silence checked every second, five-minute trend
+         * windows.
          *
          * <p>The catch-up threshold is a minute, comfortably longer than any staleness rule's
          * limit and far shorter than a backlog worth suppressing for.
+         *
+         * <p><b>One window span for every trend rule</b>, rather than a span per rule. A per-rule
+         * span means the rule has to carry it, and rule definitions belong to the control plane —
+         * so this stays a deployment setting until there is somewhere proper to put it. The
+         * capacity of 64 bounds a changelog record: a device reporting at 10 Hz would otherwise put
+         * three thousand samples into every write.
          *
          * @param telemetryTopic topic the gateway publishes to
          * @param alertTopic topic alerts are published to
@@ -81,6 +94,9 @@ public final class AlertTopology {
                     alertTopic,
                     Duration.ofSeconds(1),
                     Duration.ofMinutes(1),
+                    Duration.ofMinutes(5),
+                    64,
+                    DerivedMetrics.DEFAULT_MINIMUM_SAMPLES,
                     true);
         }
     }
@@ -105,7 +121,12 @@ public final class AlertTopology {
                 PROCESSOR,
                 () ->
                         new RuleProcessor(
-                                engine, config.punctuationInterval(), config.catchUpThreshold()),
+                                engine,
+                                config.punctuationInterval(),
+                                config.catchUpThreshold(),
+                                config.windowSpan(),
+                                config.windowCapacity(),
+                                config.minimumWindowSamples()),
                 SOURCE);
 
         topology.addStateStore(
@@ -113,6 +134,8 @@ public final class AlertTopology {
                 PROCESSOR);
         topology.addStateStore(
                 store(RuleProcessor.ALERT_STATE_STORE, AlertState.class, config), PROCESSOR);
+        topology.addStateStore(
+                store(RuleProcessor.WINDOW_STORE, DeviceWindows.class, config), PROCESSOR);
 
         topology.addSink(
                 SINK,

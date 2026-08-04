@@ -104,6 +104,9 @@ class AlertTopologyTest {
                         ALERT_TOPIC,
                         Duration.ofSeconds(1),
                         Duration.ofMinutes(1),
+                        Duration.ofMinutes(5),
+                         64,
+                         8,
                         false);
 
         driver = new TopologyTestDriver(AlertTopology.build(fleetRules(), config), props, T0);
