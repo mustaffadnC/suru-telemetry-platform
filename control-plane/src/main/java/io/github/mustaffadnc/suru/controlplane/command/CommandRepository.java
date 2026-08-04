@@ -3,6 +3,8 @@ package io.github.mustaffadnc.suru.controlplane.command;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.mustaffadnc.suru.controlplane.audit.AuditEntry;
+import io.github.mustaffadnc.suru.controlplane.audit.AuditLog;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -17,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import javax.sql.DataSource;
+import org.springframework.stereotype.Component;
 
 /**
  * Commands and their outbox rows, written together or not at all.
@@ -44,17 +47,25 @@ import javax.sql.DataSource;
  * thing this class exists for: the two inserts share an explicit connection with autocommit off,
  * and nothing about that depends on proxying, a call being external, or an annotation being read.
  */
+// @Component rather than @Repository. @Repository asks Spring to proxy the bean so it can
+// translate SQLException into its own DataAccessException hierarchy — which fails outright on a
+// final class, and is unwanted anyway: this class throws SQLException deliberately, and callers
+// distinguish a constraint violation from a connection failure by reading it.
+@Component
 public final class CommandRepository {
 
     private final DataSource dataSource;
+    private final AuditLog auditLog;
 
     /**
      * Creates a repository.
      *
      * @param dataSource the database
+     * @param auditLog where the record of who issued what is written, in the same transaction
      */
-    public CommandRepository(DataSource dataSource) {
+    public CommandRepository(DataSource dataSource, AuditLog auditLog) {
         this.dataSource = dataSource;
+        this.auditLog = auditLog;
     }
 
     /**
@@ -119,7 +130,9 @@ public final class CommandRepository {
 
                 if (inserted.isEmpty()) {
                     // The key already exists. Return the original, and write no outbox row: the
-                    // first request's row is already there or already published.
+                    // first request's row is already there or already published. No audit entry
+                    // either — nothing happened, and a log of things that did not happen is a log
+                    // an auditor learns to skim.
                     Command existing =
                             findByIdempotencyKey(connection, tenantId, idempotencyKey)
                                     .orElseThrow(
@@ -132,6 +145,22 @@ public final class CommandRepository {
                 }
 
                 insertOutbox(connection, id, topic, type, params, deviceId, tenantId);
+
+                // Third write, same transaction. No command can exist without the record of who
+                // asked for it: a separate insert would give that up the moment anything failed
+                // between the two, and it would fail exactly when someone cared.
+                auditLog.record(
+                        connection,
+                        AuditEntry.allowed(
+                                tenantId,
+                                issuedBy,
+                                "command.issue",
+                                deviceId,
+                                Map.of(
+                                        "commandId", id.toString(),
+                                        "type", type.name(),
+                                        "params", params.toString())));
+
                 connection.commit();
                 return new Issued(inserted.get(), true);
             } catch (SQLException | RuntimeException e) {

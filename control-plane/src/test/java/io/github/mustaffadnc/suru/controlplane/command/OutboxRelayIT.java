@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.mustaffadnc.suru.controlplane.audit.AuditLog;
 import io.github.mustaffadnc.suru.storage.TelemetrySchema;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -72,7 +73,7 @@ class OutboxRelayIT {
         dataSource = new HikariDataSource(config);
 
         TelemetrySchema.migrate(dataSource);
-        repository = new CommandRepository(dataSource);
+        repository = new CommandRepository(dataSource, new AuditLog(dataSource));
         execute("INSERT INTO tenant (tenant_id, display_name) VALUES ('acme', 'Acme')");
     }
 

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.mustaffadnc.suru.controlplane.audit.AuditLog;
 import io.github.mustaffadnc.suru.storage.TelemetrySchema;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -63,7 +64,7 @@ class CommandRepositoryIT {
         dataSource = new HikariDataSource(config);
 
         TelemetrySchema.migrate(dataSource);
-        repository = new CommandRepository(dataSource);
+        repository = new CommandRepository(dataSource, new AuditLog(dataSource));
 
         execute("INSERT INTO tenant (tenant_id, display_name) VALUES ('acme', 'Acme')");
         execute("INSERT INTO tenant (tenant_id, display_name) VALUES ('other', 'Other')");
@@ -155,6 +156,98 @@ class CommandRepositoryIT {
         } finally {
             execute("DROP TRIGGER outbox_breaks ON command_outbox");
         }
+    }
+
+    private static long auditRowsFor(String device) {
+        try (Connection connection = dataSource.getConnection();
+                Statement statement = connection.createStatement();
+                ResultSet rows =
+                        statement.executeQuery(
+                                "SELECT count(*) FROM audit_log WHERE subject = '" + device + "'")) {
+            rows.next();
+            return rows.getLong(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
+    @DisplayName("issuing records who asked, in the same transaction")
+    void issueIsAudited() throws SQLException {
+        repository.issue(
+                TENANT, "link/audited", "k-audit", CommandType.ARM, Map.of(), "captain@acme",
+                TOPIC, TIMEOUT);
+
+        assertThat(auditRowsFor("link/audited")).isEqualTo(1);
+
+        try (Connection connection = dataSource.getConnection();
+                Statement statement = connection.createStatement();
+                ResultSet rows =
+                        statement.executeQuery(
+                                """
+                                SELECT actor, action, outcome, detail->>'type' AS type
+                                  FROM audit_log WHERE subject = 'link/audited'
+                                """)) {
+            rows.next();
+            assertThat(rows.getString("actor")).isEqualTo("captain@acme");
+            assertThat(rows.getString("action")).isEqualTo("command.issue");
+            assertThat(rows.getString("outcome")).isEqualTo("ALLOWED");
+            assertThat(rows.getString("type")).isEqualTo("ARM");
+        }
+    }
+
+    /**
+     * The property the shared transaction buys: no command exists without the record of who asked
+     * for it.
+     *
+     * <p>A separate audit insert would give this up the moment anything failed between the two —
+     * and it would fail precisely when someone came looking.
+     */
+    @Test
+    @DisplayName("a failed audit write rolls the command back with it")
+    void auditFailureRollsBackTheCommand() {
+        execute(
+                """
+                CREATE OR REPLACE FUNCTION fail_audit() RETURNS TRIGGER AS $$
+                BEGIN RAISE EXCEPTION 'audit unavailable'; END;
+                $$ LANGUAGE plpgsql
+                """);
+        execute(
+                """
+                CREATE TRIGGER audit_breaks BEFORE INSERT ON audit_log
+                FOR EACH ROW EXECUTE FUNCTION fail_audit()
+                """);
+        try {
+            assertThatThrownBy(
+                            () ->
+                                    repository.issue(
+                                            TENANT, "link/unauditable", "k-noaudit",
+                                            CommandType.ARM, Map.of(), "operator@acme", TOPIC,
+                                            TIMEOUT))
+                    .hasStackTraceContaining("audit unavailable");
+
+            assertThat(count("command"))
+                    .as("an unauditable command is not issued")
+                    .isZero();
+            assertThat(count("command_outbox")).isZero();
+        } finally {
+            execute("DROP TRIGGER audit_breaks ON audit_log");
+        }
+    }
+
+    @Test
+    @DisplayName("an idempotent re-issue does not write a second audit entry")
+    void reissueIsNotAuditedTwice() throws SQLException {
+        repository.issue(
+                TENANT, "link/once", "k-once", CommandType.ARM, Map.of(), "operator@acme", TOPIC,
+                TIMEOUT);
+        repository.issue(
+                TENANT, "link/once", "k-once", CommandType.ARM, Map.of(), "operator@acme", TOPIC,
+                TIMEOUT);
+
+        assertThat(auditRowsFor("link/once"))
+                .as("nothing happened the second time, and a log of non-events gets skimmed")
+                .isEqualTo(1);
     }
 
     @Test
