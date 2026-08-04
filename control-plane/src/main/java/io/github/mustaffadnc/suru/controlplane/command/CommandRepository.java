@@ -159,8 +159,9 @@ public final class CommandRepository {
         String sql =
                 """
                 INSERT INTO command (id, tenant_id, device_id, idempotency_key, command_type,
-                                     params, state, issued_by, created_at, updated_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?::jsonb, 'PENDING', ?, ?, ?, ?)
+                                     mav_command_id, params, state, issued_by, created_at,
+                                     updated_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, 'PENDING', ?, ?, ?, ?)
                 ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
                 """;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -169,11 +170,12 @@ public final class CommandRepository {
             statement.setString(3, deviceId);
             statement.setString(4, idempotencyKey);
             statement.setString(5, type.name());
-            statement.setString(6, toJson(params));
-            statement.setString(7, issuedBy);
-            statement.setTimestamp(8, Timestamp.from(now));
+            statement.setInt(6, type.mavCommandId());
+            statement.setString(7, toJson(params));
+            statement.setString(8, issuedBy);
             statement.setTimestamp(9, Timestamp.from(now));
-            statement.setTimestamp(10, Timestamp.from(expiresAt));
+            statement.setTimestamp(10, Timestamp.from(now));
+            statement.setTimestamp(11, Timestamp.from(expiresAt));
 
             if (statement.executeUpdate() == 0) {
                 return Optional.empty();
@@ -287,6 +289,60 @@ public final class CommandRepository {
             statement.setTimestamp(4, Timestamp.from(at));
             statement.setObject(5, commandId);
             return statement.executeUpdate() == 1;
+        }
+    }
+
+    /**
+     * Records a vehicle's COMMAND_ACK.
+     *
+     * <p><b>Matched on {@code (tenant, device, MAV_CMD id)}, because that is all the answer
+     * carries.</b> COMMAND_ACK has no correlation id — the vehicle never receives this platform's
+     * command id and cannot echo it back — so there is nothing else to match on. What makes that
+     * sufficient is the partial unique index from {@code V6}: at most one unanswered command per
+     * device and MAV_CMD id, so the match is unique whenever it exists.
+     *
+     * <p>{@code ORDER BY created_at} is belt and braces. The index makes more than one match
+     * impossible, and if a future migration ever relaxed it the oldest outstanding command is the
+     * one a vehicle answers first.
+     *
+     * @param tenantId owning tenant
+     * @param deviceId the vehicle that answered
+     * @param mavCommandId the MAV_CMD id from the ACK
+     * @param result the MAVLink result code, zero meaning accepted
+     * @param at when the answer arrived
+     * @return the command that was settled, or empty when the ACK matched nothing
+     * @throws SQLException if the update fails
+     */
+    public Optional<UUID> recordAckFromVehicle(
+            String tenantId, String deviceId, int mavCommandId, int result, Instant at)
+            throws SQLException {
+        String sql =
+                """
+                UPDATE command
+                   SET state = CASE WHEN ? = 0 THEN 'ACKED' ELSE 'REJECTED' END,
+                       ack_result = ?, ack_at = ?, updated_at = ?
+                 WHERE id = (
+                       SELECT id FROM command
+                        WHERE tenant_id = ? AND device_id = ? AND mav_command_id = ?
+                          AND state IN ('PENDING', 'SENT')
+                        ORDER BY created_at
+                        LIMIT 1)
+                RETURNING id
+                """;
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, result);
+            statement.setInt(2, result);
+            statement.setTimestamp(3, Timestamp.from(at));
+            statement.setTimestamp(4, Timestamp.from(at));
+            statement.setString(5, tenantId);
+            statement.setString(6, deviceId);
+            statement.setInt(7, mavCommandId);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next()
+                        ? Optional.of(rows.getObject("id", UUID.class))
+                        : Optional.empty();
+            }
         }
     }
 

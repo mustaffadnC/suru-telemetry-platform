@@ -13,6 +13,7 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -237,7 +238,8 @@ class CommandRepositoryIT {
                                 "operator@acme", TOPIC, Duration.ofSeconds(-1))
                         .command()
                         .id();
-        UUID answered = issue("k-answered", CommandType.ARM).command().id();
+        // A different MAV_CMD id, so the one-outstanding guard does not refuse it.
+        UUID answered = issue("k-answered", CommandType.LAND).command().id();
         repository.recordAck(answered, 0, Instant.now());
 
         assertThat(repository.expireStale(Instant.now())).isEqualTo(1);
@@ -279,11 +281,81 @@ class CommandRepositoryIT {
         assertThat(stored.type()).isEqualTo(CommandType.TAKEOFF);
     }
 
+    /**
+     * The constraint that makes ACK matching possible at all.
+     *
+     * <p>COMMAND_ACK carries no correlation id, so an answer can only be matched on
+     * {@code (device, MAV_CMD id)}. ARM and DISARM are both MAV_CMD 400, so with both outstanding
+     * an ACK for 400 is genuinely ambiguous and no amount of care in the matching code fixes it.
+     * The database refuses the second one instead.
+     */
+    @Test
+    @DisplayName("a device cannot have two unanswered commands sharing a MAV_CMD id")
+    void oneOutstandingCommandPerMavCommandId() throws SQLException {
+        issue("k-arm-1", CommandType.ARM);
+
+        assertThatThrownBy(() -> issue("k-disarm-1", CommandType.DISARM))
+                .isInstanceOf(SQLException.class)
+                .hasStackTraceContaining("command_one_outstanding_idx");
+
+        // Different MAV_CMD id, so no ambiguity and no refusal.
+        assertThat(issue("k-land-1", CommandType.LAND).created()).isTrue();
+    }
+
+    @Test
+    @DisplayName("once a command is answered the next of the same type is allowed")
+    void outstandingGuardReleasesOnAnswer() throws SQLException {
+        UUID first = issue("k-arm-2", CommandType.ARM).command().id();
+        repository.recordAck(first, 0, Instant.now());
+
+        assertThat(issue("k-disarm-2", CommandType.DISARM).created())
+                .as("the earlier answer has been accounted for, so 400 is unambiguous again")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("a vehicle's ACK is matched by MAV_CMD id, which is all it carries")
+    void ackMatchedByMavCommandId() throws SQLException {
+        UUID takeoff = issue("k-ack-match", CommandType.TAKEOFF).command().id();
+
+        Optional<UUID> matched =
+                repository.recordAckFromVehicle(TENANT, DEVICE, 22, 0, Instant.now());
+
+        assertThat(matched).hasValue(takeoff);
+        assertThat(repository.find(TENANT, takeoff).orElseThrow().state())
+                .isEqualTo(CommandState.ACKED);
+    }
+
+    @Test
+    @DisplayName("an ACK for a command nobody issued matches nothing")
+    void unmatchedAckIsIgnored() throws SQLException {
+        assertThat(repository.recordAckFromVehicle(TENANT, DEVICE, 400, 0, Instant.now()))
+                .as("a vehicle answering a command from another ground station, or a stale retry")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("an ACK does not settle another device's command")
+    void ackIsScopedToItsDevice() throws SQLException {
+        UUID mine = issue("k-ack-scope", CommandType.LAND).command().id();
+
+        assertThat(repository.recordAckFromVehicle(TENANT, "link/sys9", 21, 0, Instant.now()))
+                .isEmpty();
+        assertThat(repository.find(TENANT, mine).orElseThrow().state())
+                .isEqualTo(CommandState.PENDING);
+    }
+
     @Test
     @DisplayName("ARM and DISARM are distinguished in the outbox payload, not by MAV_CMD id")
     void armAndDisarmShareACommandId() throws SQLException {
-        issue("k-arm", CommandType.ARM);
-        issue("k-disarm", CommandType.DISARM);
+        // Different devices: the one-outstanding guard is per device, and this test is about
+        // what lands in the payload rather than about the guard.
+        repository.issue(
+                TENANT, "link/sysA", "k-arm", CommandType.ARM, Map.of(), "operator@acme", TOPIC,
+                TIMEOUT);
+        repository.issue(
+                TENANT, "link/sysB", "k-disarm", CommandType.DISARM, Map.of(), "operator@acme",
+                TOPIC, TIMEOUT);
 
         try (Connection connection = dataSource.getConnection();
                 Statement statement = connection.createStatement();

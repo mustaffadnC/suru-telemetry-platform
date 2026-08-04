@@ -33,9 +33,18 @@ public enum CommandType {
      * The MAV_CMD id this maps to.
      *
      * <p><b>{@link #ARM} and {@link #DISARM} share one.</b> Both are
-     * MAV_CMD_COMPONENT_ARM_DISARM and are told apart only by {@link #param1()} — so a
-     * COMMAND_ACK identifies the pair, not which of them was sent, and matching an ACK by command
-     * id rather than by MAV_CMD id is what keeps a disarm from being credited to an arm.
+     * MAV_CMD_COMPONENT_ARM_DISARM, told apart only by {@link #param1()}, so a COMMAND_ACK for 400
+     * identifies the pair and not which of them was sent.
+     *
+     * <p>There is no way to resolve that from the answer. COMMAND_ACK carries {@code command},
+     * {@code result}, {@code progress}, {@code result_param2} and the target ids — and no
+     * correlation id. The vehicle never receives this platform's command id and cannot echo it
+     * back, so an ACK can only ever be matched on {@code (device, MAV_CMD id)}.
+     *
+     * <p>So the ambiguity is prevented instead of resolved: at most one unanswered command per
+     * {@code (tenant, device, MAV_CMD id)}, enforced by a partial unique index in migration
+     * {@code V6}. Guessing would credit a disarm to an arm, and report a vehicle armed at the
+     * moment it was disarmed.
      *
      * @return the command id
      */

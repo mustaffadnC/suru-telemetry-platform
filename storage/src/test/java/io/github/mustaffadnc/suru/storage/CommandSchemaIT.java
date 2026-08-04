@@ -48,26 +48,35 @@ class CommandSchemaIT {
         }
     }
 
-    private static void insertCommand(String id, String idempotencyKey) {
+    /**
+     * Inserts an ARM command.
+     *
+     * <p>Each test supplies its own device, because V6 allows only one unanswered command per
+     * {@code (tenant, device, MAV_CMD id)} — a second ARM to the same vehicle would trip that
+     * constraint rather than the one the test is about.
+     */
+    private static void insertCommand(String id, String idempotencyKey, String device) {
         execute(
                 """
                 INSERT INTO command (id, tenant_id, device_id, idempotency_key, command_type,
-                                     state, issued_by, expires_at)
-                VALUES ('%s', 'acme', 'link/sys1', '%s', 'ARM', 'PENDING', 'operator@acme',
+                                     mav_command_id, state, issued_by, expires_at)
+                VALUES ('%s', 'acme', '%s', '%s', 'ARM', 400, 'PENDING', 'operator@acme',
                         now() + INTERVAL '30 seconds')
                 """
-                        .formatted(id, idempotencyKey));
+                        .formatted(id, device, idempotencyKey));
     }
 
     @Test
     @DisplayName("the same idempotency key cannot issue a second command")
     void idempotencyKeyIsUniquePerTenant() throws SQLException {
-        insertCommand("11111111-1111-1111-1111-111111111111", "retry-me");
+        insertCommand("11111111-1111-1111-1111-111111111111", "retry-me", "link/sysA");
 
         assertThatThrownBy(
                         () ->
                                 insertCommand(
-                                        "22222222-2222-2222-2222-222222222222", "retry-me"))
+                                        "22222222-2222-2222-2222-222222222222",
+                                        "retry-me",
+                                        "link/sysB"))
                 .as("for ARM or TAKEOFF this is the difference between a retry and a second launch")
                 .hasRootCauseInstanceOf(org.postgresql.util.PSQLException.class)
                 .hasStackTraceContaining("command_tenant_id_idempotency_key_key");
@@ -84,13 +93,13 @@ class CommandSchemaIT {
                 INSERT INTO tenant (tenant_id, display_name) VALUES ('other', 'Other')
                 ON CONFLICT DO NOTHING
                 """);
-        insertCommand("33333333-3333-3333-3333-333333333333", "shared-key");
+        insertCommand("33333333-3333-3333-3333-333333333333", "shared-key", "link/sysC");
         execute(
                 """
                 INSERT INTO command (id, tenant_id, device_id, idempotency_key, command_type,
-                                     state, issued_by, expires_at)
+                                     mav_command_id, state, issued_by, expires_at)
                 VALUES ('44444444-4444-4444-4444-444444444444', 'other', 'link/sys1',
-                        'shared-key', 'ARM', 'PENDING', 'operator@other',
+                        'shared-key', 'ARM', 400, 'PENDING', 'operator@other',
                         now() + INTERVAL '30 seconds')
                 """);
 
@@ -107,10 +116,11 @@ class CommandSchemaIT {
                                 execute(
                                         """
                                         INSERT INTO command (id, tenant_id, device_id, idempotency_key,
-                                                             command_type, state, issued_by, expires_at)
+                                                             command_type, mav_command_id, state,
+                                                             issued_by, expires_at)
                                         VALUES ('55555555-5555-5555-5555-555555555555', 'acme',
-                                                'link/sys1', 'bad-state', 'ARM', 'PROBABLY_FINE',
-                                                'operator@acme', now())
+                                                'link/sysF', 'bad-state', 'ARM', 400,
+                                                'PROBABLY_FINE', 'operator@acme', now())
                                         """))
                 .hasStackTraceContaining("command_state_check");
     }
@@ -118,7 +128,7 @@ class CommandSchemaIT {
     @Test
     @DisplayName("the outbox row and its command are written or lost together")
     void outboxCascadesWithItsCommand() throws SQLException {
-        insertCommand("66666666-6666-6666-6666-666666666666", "outbox-test");
+        insertCommand("66666666-6666-6666-6666-666666666666", "outbox-test", "link/sysD");
         execute(
                 """
                 INSERT INTO command_outbox (command_id, topic, payload)
@@ -136,7 +146,7 @@ class CommandSchemaIT {
     @Test
     @DisplayName("the outbox id cannot be supplied by the application")
     void outboxIdIsGeneratedAlways() throws SQLException {
-        insertCommand("77777777-7777-7777-7777-777777777777", "identity-test");
+        insertCommand("77777777-7777-7777-7777-777777777777", "identity-test", "link/sysE");
 
         assertThatThrownBy(
                         () ->
