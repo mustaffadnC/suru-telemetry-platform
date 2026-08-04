@@ -6,7 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.mustaffadnc.suru.controlplane.security.PrincipalResolver;
+import io.github.mustaffadnc.suru.controlplane.security.TestTokens;
 import io.github.mustaffadnc.suru.storage.TelemetrySchema;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -37,6 +37,7 @@ import org.testcontainers.utility.DockerImageName;
  * lands in the audit log</em>, and one tenant cannot see another's commands from any endpoint.
  */
 @SpringBootTest
+@org.springframework.context.annotation.Import(TestTokens.class)
 class CommandApiIT {
 
     private static final DockerImageName IMAGE =
@@ -72,7 +73,14 @@ class CommandApiIT {
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+        // The real filter chain, so a request without a valid token is rejected by the same code
+        // that rejects one in production.
+        mockMvc =
+                MockMvcBuilders.webAppContextSetup(context)
+                        .apply(
+                                org.springframework.security.test.web.servlet.setup
+                                        .SecurityMockMvcConfigurers.springSecurity())
+                        .build();
         TelemetrySchema.migrate(dataSource);
         execute(
                 """
@@ -109,19 +117,20 @@ class CommandApiIT {
         }
     }
 
-    /** Applies the identity headers, omitting any that are null. */
+    /** Presents a signed token, or none at all when the tenant is null. */
     private static MockHttpServletRequestBuilder identify(
             MockHttpServletRequestBuilder builder, String tenant, String actor, String roles) {
-        if (tenant != null) {
-            builder = builder.header(PrincipalResolver.HEADER_TENANT, tenant);
+        if (tenant == null && actor == null) {
+            return builder;
         }
-        if (actor != null) {
-            builder = builder.header(PrincipalResolver.HEADER_ACTOR, actor);
-        }
-        if (roles != null) {
-            builder = builder.header(PrincipalResolver.HEADER_ROLES, roles);
-        }
-        return builder;
+        String[] roleNames = roles == null ? new String[0] : roles.split(",");
+        return builder.header("Authorization", "Bearer " + TestTokens.token(tenant, actor, roleNames));
+    }
+
+    /** Presents a raw token value. */
+    private static MockHttpServletRequestBuilder bearer(
+            MockHttpServletRequestBuilder builder, String token) {
+        return builder.header("Authorization", "Bearer " + token);
     }
 
     private MvcResult issue(
@@ -197,12 +206,68 @@ class CommandApiIT {
     }
 
     @Test
-    @DisplayName("a request with no identity is refused before anything else happens")
+    @DisplayName("a request with no token is refused before anything else happens")
     void anonymousIsUnauthenticated() throws Exception {
         MvcResult response =
                 issue(null, null, "ADMIN", "link/api4", CommandType.ARM, "api-k4");
 
         assertThat(response.getResponse().getStatus()).isEqualTo(401);
+    }
+
+    private MvcResult issueWithToken(String token, String device, String key) throws Exception {
+        String body =
+                """
+                {"deviceId":"%s","type":"ARM","params":{},"idempotencyKey":"%s"}"""
+                        .formatted(device, key);
+        return mockMvc.perform(
+                        bearer(post("/api/v1/commands"), token)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(body))
+                .andReturn();
+    }
+
+    /**
+     * The test that separates reading claims from checking who wrote them.
+     *
+     * <p>The token is well formed and claims every role there is. It is signed by a key the
+     * application does not trust, which is the only thing wrong with it — and the only thing that
+     * needs to be wrong. An implementation that decoded the claims without verifying the signature
+     * would pass every other test in this class.
+     */
+    @Test
+    @DisplayName("a token signed by an untrusted key is rejected however good its claims look")
+    void forgedTokenIsRejected() throws Exception {
+        String forged = TestTokens.forgedToken("acme", "attacker@nowhere", "ADMIN", "OPERATOR");
+
+        MvcResult response = issueWithToken(forged, "link/forged", "api-forged");
+
+        assertThat(response.getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    @DisplayName("an expired token is rejected even though it was signed correctly")
+    void expiredTokenIsRejected() throws Exception {
+        String expired = TestTokens.expiredToken("acme", "operator@acme", "OPERATOR");
+
+        MvcResult response = issueWithToken(expired, "link/expired", "api-expired");
+
+        assertThat(response.getResponse().getStatus()).isEqualTo(401);
+    }
+
+    /**
+     * A valid token that says nothing about which tenant it belongs to.
+     *
+     * <p>403 rather than 401, and rather than a default: the caller authenticated successfully, so
+     * re-authenticating will not help, and any default tenant would be somebody's real data.
+     */
+    @Test
+    @DisplayName("a valid token with no tenant claim is refused rather than defaulted")
+    void tokenWithoutTenantIsRefused() throws Exception {
+        String tenantless = TestTokens.token(null, "operator@nowhere", "OPERATOR");
+
+        MvcResult response = issueWithToken(tenantless, "link/notenant", "api-notenant");
+
+        assertThat(response.getResponse().getStatus()).isEqualTo(403);
     }
 
     /**

@@ -14,6 +14,15 @@ spring:
   # on startup — several restarting at once would otherwise race to migrate the same database.
   flyway:
     enabled: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # issuer-uri rather than jwk-set-uri: it makes the resource server fetch the provider's
+          # discovery document and then *validate the iss claim* against it. Configuring the key
+          # set alone verifies that a token was signed by the right key while accepting any issuer
+          # that key ever signed for, which is a real difference in a shared Keycloak.
+          issuer-uri: ${SURU_OIDC_ISSUER:http://localhost:8081/realms/suru}
 
 server:
   port: ${SURU_API_PORT:8080}

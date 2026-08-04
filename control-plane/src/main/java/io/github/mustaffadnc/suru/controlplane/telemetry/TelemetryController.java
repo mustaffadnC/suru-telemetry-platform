@@ -1,5 +1,6 @@
 package io.github.mustaffadnc.suru.controlplane.telemetry;
 
+import io.github.mustaffadnc.suru.controlplane.security.PrincipalResolver;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -12,7 +13,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -26,11 +26,11 @@ import org.springframework.web.bind.annotation.RestController;
  * one by default rather than let a path be smuggled through. So it travels as a parameter, which
  * also keeps the id opaque to routing rather than baking its current shape into the URL space.
  *
- * <p><b>Tenancy comes from a header, and that is temporary.</b> {@code X-Tenant-Id} is trusted
- * outright here, which is adequate for development and is not authentication — anyone who can reach
- * the port can name any tenant. Phase 5 replaces it with a claim from a verified token, at which
- * point this parameter disappears. It is called out rather than left to be discovered because a
- * header named like this is easy to mistake for a security boundary.
+ * <p><b>Tenancy comes from the verified token, never from the request.</b> It used to arrive in an
+ * {@code X-Tenant-Id} header, which was adequate only while nothing was authenticated: once a token
+ * is required, a header the caller still controls is worse than no check at all, because an
+ * authenticated user of one tenant could name another and be believed. The header is gone, and the
+ * tenant is read from the claim the identity provider signed.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -40,20 +40,22 @@ public class TelemetryController {
     private static final Duration DEFAULT_WINDOW = Duration.ofHours(24);
 
     private final TelemetryQueryService service;
+    private final PrincipalResolver principals;
 
     /**
      * Creates the controller.
      *
      * @param service the query service
+     * @param principals resolves the caller from the verified token
      */
-    public TelemetryController(TelemetryQueryService service) {
+    public TelemetryController(TelemetryQueryService service, PrincipalResolver principals) {
         this.service = service;
+        this.principals = principals;
     }
 
     /**
      * Reads a downsampled series for one metric.
      *
-     * @param tenantId owning tenant
      * @param deviceId the device
      * @param metric the metric
      * @param from inclusive start
@@ -68,7 +70,6 @@ public class TelemetryController {
                     "Chooses the coarsest stored resolution that still resolves the requested "
                             + "bucket, and reports which one answered in the response.")
     public TelemetrySeries series(
-            @RequestHeader("X-Tenant-Id") String tenantId,
             @RequestParam("device") String deviceId,
             @RequestParam("metric") String metric,
             @Parameter(description = "ISO-8601 instant, inclusive")
@@ -80,13 +81,13 @@ public class TelemetryController {
                     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
                     Instant to,
             @RequestParam(name = "maxPoints", defaultValue = "500") int maxPoints) {
+        String tenantId = principals.resolve().tenantId();
         return service.series(tenantId, deviceId, metric, from, to, maxPoints);
     }
 
     /**
      * The latest value of every metric a device has reported.
      *
-     * @param tenantId owning tenant
      * @param deviceId the device
      * @param windowHours how far back to look
      * @return metric name to value
@@ -94,31 +95,29 @@ public class TelemetryController {
     @GetMapping("/devices/latest")
     @Operation(summary = "Latest value of every metric a device has reported")
     public Map<String, Double> latest(
-            @RequestHeader("X-Tenant-Id") String tenantId,
             @RequestParam("device") String deviceId,
             @RequestParam(name = "windowHours", defaultValue = "24") long windowHours) {
+        String tenantId = principals.resolve().tenantId();
         return service.latest(tenantId, deviceId, Duration.ofHours(windowHours));
     }
 
     /**
      * Devices that have reported recently.
      *
-     * @param tenantId owning tenant
      * @param windowHours how far back to look
      * @return device ids
      */
     @GetMapping("/devices")
     @Operation(summary = "Devices seen within a window")
     public List<String> devices(
-            @RequestHeader("X-Tenant-Id") String tenantId,
             @RequestParam(name = "windowHours", defaultValue = "24") long windowHours) {
+        String tenantId = principals.resolve().tenantId();
         return service.devices(tenantId, Duration.ofHours(windowHours));
     }
 
     /**
      * Metrics a device has reported recently.
      *
-     * @param tenantId owning tenant
      * @param deviceId the device
      * @param windowHours how far back to look
      * @return metric names
@@ -126,9 +125,9 @@ public class TelemetryController {
     @GetMapping("/devices/metrics")
     @Operation(summary = "Metrics a device has reported within a window")
     public List<String> metrics(
-            @RequestHeader("X-Tenant-Id") String tenantId,
             @RequestParam("device") String deviceId,
             @RequestParam(name = "windowHours", defaultValue = "24") long windowHours) {
+        String tenantId = principals.resolve().tenantId();
         return service.metrics(tenantId, deviceId, Duration.ofHours(windowHours));
     }
 

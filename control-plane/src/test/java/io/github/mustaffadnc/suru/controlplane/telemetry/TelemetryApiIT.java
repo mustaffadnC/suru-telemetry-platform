@@ -31,6 +31,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 @SpringBootTest
+@org.springframework.context.annotation.Import(
+        io.github.mustaffadnc.suru.controlplane.security.TestTokens.class)
 class TelemetryApiIT {
 
     private static final String TENANT = "tenant-a";
@@ -117,9 +119,21 @@ class TelemetryApiIT {
 
     private MockMvc mvc() {
         if (mvc == null) {
-            mvc = MockMvcBuilders.webAppContextSetup(context).build();
+            mvc =
+                    MockMvcBuilders.webAppContextSetup(context)
+                            .apply(
+                                    org.springframework.security.test.web.servlet.setup
+                                            .SecurityMockMvcConfigurers.springSecurity())
+                            .build();
         }
         return mvc;
+    }
+
+    /** A signed OBSERVER token for a tenant; reading needs nothing more. */
+    private static String bearer(String tenant) {
+        return "Bearer "
+                + io.github.mustaffadnc.suru.controlplane.security.TestTokens.token(
+                        tenant, "reader@" + tenant, "OBSERVER");
     }
 
     @Test
@@ -130,7 +144,7 @@ class TelemetryApiIT {
         // range would correctly drop to raw; the budget decides, not the span alone.
         mvc().perform(
                         get("/api/v1/telemetry")
-                                .header("X-Tenant-Id", TENANT)
+                                .header("Authorization", bearer(TENANT))
                                 .param("device", DEVICE)
                                 .param("metric", METRIC)
                                 .param("from", SERIES_START.toString())
@@ -151,7 +165,7 @@ class TelemetryApiIT {
     void shortRangeUsesRaw() throws Exception {
         mvc().perform(
                         get("/api/v1/telemetry")
-                                .header("X-Tenant-Id", TENANT)
+                                .header("Authorization", bearer(TENANT))
                                 .param("device", DEVICE)
                                 .param("metric", METRIC)
                                 .param("from", SERIES_END.minus(Duration.ofMinutes(2)).toString())
@@ -168,7 +182,7 @@ class TelemetryApiIT {
         String body =
                 mvc().perform(
                                 get("/api/v1/telemetry")
-                                        .header("X-Tenant-Id", TENANT)
+                                        .header("Authorization", bearer(TENANT))
                                         .param("device", DEVICE)
                                         .param("metric", METRIC)
                                         .param("from", SERIES_START.toString())
@@ -199,7 +213,7 @@ class TelemetryApiIT {
     void latestPerMetric() throws Exception {
         mvc().perform(
                         get("/api/v1/devices/latest")
-                                .header("X-Tenant-Id", TENANT)
+                                .header("Authorization", bearer(TENANT))
                                 .param("device", DEVICE)
                                 .param("windowHours", "24"))
                 .andExpect(status().isOk())
@@ -210,11 +224,11 @@ class TelemetryApiIT {
     @Test
     @DisplayName("A query never sees another tenant's rows")
     void tenantsAreIsolated() throws Exception {
-        mvc().perform(get("/api/v1/devices").header("X-Tenant-Id", "tenant-b").param("windowHours", "24"))
+        mvc().perform(get("/api/v1/devices").header("Authorization", bearer("tenant-b")).param("windowHours", "24"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1));
 
-        mvc().perform(get("/api/v1/devices").header("X-Tenant-Id", TENANT).param("windowHours", "24"))
+        mvc().perform(get("/api/v1/devices").header("Authorization", bearer(TENANT)).param("windowHours", "24"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2));
     }
@@ -224,7 +238,7 @@ class TelemetryApiIT {
     void invertedRangeIsRejected() throws Exception {
         mvc().perform(
                         get("/api/v1/telemetry")
-                                .header("X-Tenant-Id", TENANT)
+                                .header("Authorization", bearer(TENANT))
                                 .param("device", DEVICE)
                                 .param("metric", METRIC)
                                 .param("from", SERIES_END.toString())
@@ -234,10 +248,32 @@ class TelemetryApiIT {
     }
 
     @Test
-    @DisplayName("A missing tenant header is refused rather than defaulted")
-    void tenantHeaderIsRequired() throws Exception {
-        // Defaulting it would silently expose one tenant's data to an unauthenticated caller.
-        mvc().perform(get("/api/v1/devices")).andExpect(status().isBadRequest());
+    @DisplayName("A request with no token is refused, and one with no tenant claim too")
+    void tenancyCannotBeOmitted() throws Exception {
+        // This used to assert 400 for a missing X-Tenant-Id header. The header is gone: while
+        // nothing was authenticated it was adequate, but once a token is required a header the
+        // caller still controls is worse than no check at all, because an authenticated user of
+        // one tenant could name another and be believed.
+        mvc().perform(get("/api/v1/devices")).andExpect(status().isUnauthorized());
+
+        // A properly signed token that says nothing about which tenant it belongs to. Defaulting
+        // it would hand somebody's real data to a misconfigured client.
+        String tenantless =
+                io.github.mustaffadnc.suru.controlplane.security.TestTokens.token(
+                        null, "reader@nowhere", "OBSERVER");
+        mvc().perform(get("/api/v1/devices").header("Authorization", "Bearer " + tenantless))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("A token signed by an untrusted key cannot read telemetry")
+    void forgedTokenCannotRead() throws Exception {
+        String forged =
+                io.github.mustaffadnc.suru.controlplane.security.TestTokens.forgedToken(
+                        TENANT, "attacker@nowhere", "ADMIN");
+
+        mvc().perform(get("/api/v1/devices").header("Authorization", "Bearer " + forged))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

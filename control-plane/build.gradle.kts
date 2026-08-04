@@ -12,6 +12,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-validation")
+    // Identity arrives as a verified JWT rather than a header. The resource server validates the
+    // signature, issuer and expiry before any of this application's code sees the request.
+    implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
     implementation(libs.springdoc.webmvc)
     runtimeOnly(libs.postgresql)
 
@@ -23,6 +26,10 @@ dependencies {
         exclude(group = "org.junit.jupiter")
         exclude(group = "org.junit.platform")
     }
+    // For MockMvcBuilders.apply(springSecurity()): the tests drive the real filter chain, so a
+    // request without a valid token is rejected by the same code that rejects one in production.
+    testImplementation("org.springframework.security:spring-security-test")
+
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj.core)

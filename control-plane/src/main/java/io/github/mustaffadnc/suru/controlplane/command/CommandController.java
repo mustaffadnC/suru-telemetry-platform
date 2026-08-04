@@ -6,7 +6,6 @@ import io.github.mustaffadnc.suru.controlplane.security.Principal;
 import io.github.mustaffadnc.suru.controlplane.security.PrincipalResolver;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -19,6 +18,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -111,18 +111,16 @@ public final class CommandController {
      * Issues a command.
      *
      * @param request what to issue
-     * @param httpRequest the incoming request, for identity
      * @return the command, {@code 201} when newly created and {@code 200} when the idempotency key
      *     matched an existing one
      * @throws SQLException if the database is unavailable
      */
     @PostMapping
     @Operation(summary = "Issue a command to a vehicle")
-    public ResponseEntity<CommandView> issue(
-            @Valid @RequestBody IssueRequest request, HttpServletRequest httpRequest)
+    public ResponseEntity<CommandView> issue(@Valid @RequestBody IssueRequest request)
             throws SQLException {
 
-        Principal principal = principals.resolve(httpRequest);
+        Principal principal = principals.resolve();
 
         if (!principal.mayCommand()) {
             // The refusal is recorded before the response is written. A denial nobody can find
@@ -162,18 +160,14 @@ public final class CommandController {
      * difference either.
      *
      * @param id the command id
-     * @param httpRequest the incoming request, for identity
      * @return the command, or {@code 404}
      * @throws SQLException if the database is unavailable
      */
     @GetMapping("/{id}")
     @Operation(summary = "Read one command")
-    public ResponseEntity<CommandView> get(
-            @org.springframework.web.bind.annotation.PathVariable UUID id,
-            HttpServletRequest httpRequest)
-            throws SQLException {
+    public ResponseEntity<CommandView> get(@PathVariable UUID id) throws SQLException {
 
-        Principal principal = principals.resolve(httpRequest);
+        Principal principal = principals.resolve();
         return repository
                 .find(principal.tenantId(), id)
                 .map(CommandView::of)
@@ -189,19 +183,16 @@ public final class CommandController {
      *
      * @param deviceId the vehicle
      * @param limit how many to return
-     * @param httpRequest the incoming request, for identity
      * @return the commands, newest first
      * @throws SQLException if the database is unavailable
      */
     @GetMapping
     @Operation(summary = "List recent commands for a device")
     public List<CommandView> list(
-            @RequestParam String deviceId,
-            @RequestParam(defaultValue = "50") int limit,
-            HttpServletRequest httpRequest)
+            @RequestParam String deviceId, @RequestParam(defaultValue = "50") int limit)
             throws SQLException {
 
-        Principal principal = principals.resolve(httpRequest);
+        Principal principal = principals.resolve();
         return repository.findByDevice(principal.tenantId(), deviceId, Math.clamp(limit, 1, 500))
                 .stream()
                 .map(CommandView::of)

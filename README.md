@@ -33,7 +33,7 @@ That means every design decision here is answerable from both ends of the link:
 | 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ✅ done |
 | 3 | TimescaleDB schema, continuous aggregates, query API, 100M-row measurement | ✅ done |
 | 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ✅ done (webhook delivery; SMTP is an unwritten `AlertSink`) |
-| 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
+| 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | 🚧 outbox, ACK matching, audit log, OIDC and tenant isolation done; SITL end-to-end demo remains |
 | 6 | OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind | ⬜ |
 | 7 | Live map console, scripted demo, benchmarks write-up | ⬜ |
 
