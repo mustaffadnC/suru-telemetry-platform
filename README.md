@@ -24,7 +24,7 @@ That means every design decision here is answerable from both ends of the link:
 - **Real telemetry, not a fake generator.** Load comes from ArduPilot SITL instances flying real missions, and from recorded byte streams captured off an actual link.
 - **Verified against an independent implementation.** The Java decoder is differential-tested against the reference Python decoder written for the firmware.
 
-## Status — Phase 3 (storage and query) ✅
+## Status — Phase 4 (rules engine and alerting) ✅
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -32,7 +32,7 @@ That means every design decision here is answerable from both ends of the link:
 | 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
 | 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ✅ done |
 | 3 | TimescaleDB schema, continuous aggregates, query API, 100M-row measurement | ✅ done |
-| 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | 🚧 rules engine, state machine, topology, rolling windows and latency measurement done; the notifier remains |
+| 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ✅ done (webhook delivery; SMTP is an unwritten `AlertSink`) |
 | 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
 | 6 | OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind | ⬜ |
 | 7 | Live map console, scripted demo, benchmarks write-up | ⬜ |
@@ -61,11 +61,13 @@ Two more corrections worth recording, since both were beliefs the work overturne
 
 > **A timestamp field was never wall clock.** All three ingest handlers were putting `System.nanoTime()` into a field named `receivedAtEpochNanos`. That counts from an arbitrary origin and is meaningful only as a difference — used as a timestamp it produces a number that looks like nanoseconds since 1970 and is not. Nothing had noticed because nothing had yet written it to a `TIMESTAMPTZ` column; rows would have landed around 1970 or 2262 depending on the machine's uptime.
 
-**Phase 4, so far:** telemetry becomes alerts. A dependency-free rules module holds the semantics — threshold, geofence and telemetry-loss conditions, each with hysteresis, over a four-phase state machine that debounces both firing *and* recovery. The transition table is covered by construction: every test records the edge it traverses and the build fails if any row goes untested. A Kafka Streams topology runs it over changelog-backed state so a rebalance does not silently re-arm every pending alert. All three phase-4 scenarios — geofence breach, low battery, telemetry loss — pass end to end, and **an alert reaches a consumer 8.3 ms p50** after the telemetry that caused it.
+**Phase 4, verified:** telemetry becomes alerts, and alerts reach an endpoint. A dependency-free rules module holds the semantics — threshold, geofence and telemetry-loss conditions, each with hysteresis, over a four-phase state machine that debounces both firing *and* recovery. The transition table is covered by construction: every test records the edge it traverses and the build fails if any row goes untested. A Kafka Streams topology runs it over changelog-backed state so a rebalance does not silently re-arm every pending alert. All three phase-4 scenarios — geofence breach, low battery, telemetry loss — pass end to end, and **an alert reaches a consumer 8.3 ms p50** after the telemetry that caused it.
 
 > **96 % of the alert latency was a batching setting, not work.** The first measurement said 104.5 ms p50. The plain Kafka producer defaults `linger.ms` to 0; Kafka Streams overrides it to 100, and the p50 tracked that setting with a ~4 ms base. Alerts are rare by construction, so batching the alert topic buys nothing — the deployment sets 5 ms, which keeps changelog batching under load and still cuts idle alert latency twelve-fold. Numbers in [`docs/benchmarks.md`](docs/benchmarks.md).
 
 > **Detecting silence needs the clock nobody recommends.** Telemetry loss is a condition on records that did not arrive, so it needs a timer, and Kafka Streams' `STREAM_TIME` — the deterministic, replayable, conventionally-correct choice — advances only with record timestamps. If *all* telemetry stops, stream time stops with it and the platform raises **zero** telemetry-loss alerts at exactly the moment every device has gone quiet. `WALL_CLOCK_TIME` catches that but fires on the whole fleet during any replay. The two are told apart by whether records are arriving *at all*, not by how far behind they are — suppressing on lag alone reintroduces the first bug, and a test is named after that. Reasoning in [ADR-0006](docs/adr/ADR-0006-detecting-silence.md).
+
+> **The notifier gives up on purpose.** Delivery gates the offset commit, so retrying an undeliverable alert forever would block every alert behind it — losing one alert to protect the rest is the right trade, and it is made explicitly with a loud log line rather than by accident. Retries are bounded, backed off with full jitter (a burst of alerts sharing one cause would otherwise retry in lockstep against an already-struggling endpoint), and skipped entirely for permanent failures: retrying a 400 burns the budget a transient failure needed. Delivery runs as its own consumer, never on the stream thread, so a hung webhook cannot stop the platform noticing further incidents.
 
 > **Trend rules are ordinary thresholds on a derived metric name.** A rolling window per device exposes `power.battery_remaining_pct#slope_per_min`, so "draining faster than 5 % a minute" is a `Threshold`, and it inherits hysteresis and debounce instead of reimplementing them. Which metrics get a window is read back out of the rules, so a trend rule cannot be deployed without one. This matters because a battery at 40 % is fine and a battery at 40 % falling 8 %/min has five minutes left — and no level threshold can tell them apart.
 
@@ -153,6 +155,10 @@ Durum: **Faz 0–3 tamamlandı** (protokol çekirdeği + ingest gateway + depola
 Faz 3'te **100 milyon satır** gerçek bir TimescaleDB'ye yazıldı: **102.778 satır/s** ingest, **26.7× sıkıştırma** (22.46 GB → 0.84 GB) ve **1.0 ms p95** nokta sorgusu. Sıkıştırma okumayı yavaşlatmadı, **hızlandırdı** — sorgu hiçbir zaman CPU-bağımlı değildi, sıkıştırılmış satırlar bitişik olduğu için çok daha az sayfa okunuyor. Aynı 100M satır QuestDB'ye de yüklendi: QuestDB **15.6× hızlı yazıyor**, buna karşılık aynı veriyi 4.8× büyük saklıyor ve nokta sorgusunu 19× yavaş yanıtlıyor. Karar ve hangi ingest hızında yeniden gözden geçirilmesi gerektiği [ADR-0005](docs/adr/ADR-0005-timescaledb-vs-questdb.md)'te.
 
 Yol boyunca çıkan en öğretici hata: **dakikalık rollup, özetlediği ham veriden yavaştı** (70.9 ms'e karşı 1.0 ms). İlk açıklamam yanlıştı; gerçek sebep, **continuous aggregate'lerin ham tablonun indekslerini miras almaması**. `V4` migration'ı kompozit indeksi ekliyor: **70.9 ms → 2.3 ms**.
+
+Faz 4'te telemetri alarma dönüşüyor: eşik, coğrafi çit ve telemetri kaybı kuralları; hem tetiklemede hem de **düzelmede** debounce yapan dört fazlı durum makinesi (geçiş tablosunun tamamı testle kapatılıyor, kapatılmayan bir geçiş build'i kırıyor). Bir alarm, onu doğuran telemetriden **8.3 ms p50** sonra tüketiciye ulaşıyor.
+
+İki ders: (1) Alarm gecikmesinin **%96'sı iş değil, bir batching ayarıydı** — Kafka Streams `linger.ms`'i 0 yerine 100'e çekiyor. (2) **En küçük kareler regresyonu aykırı değere dayanıklı değil**; "1/n kadar oynar" iddiam yanlıştı. Dört örnekte tek bir bozuk okuma eğimi −1'den −9.1'e taşıyor, ortadaysa **işaretini ters çeviriyor**. Çözüm tahmin ediciyi değiştirmek değil, yeterli örnek sayısı şartı koymak.
 
 Yukarıdaki tablodaki hiçbir madde, fazı tamamlanıp ölçümleri `docs/benchmarks.md`'ye girmeden "çalışıyor" sayılmıyor.
 

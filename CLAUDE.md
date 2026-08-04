@@ -303,11 +303,13 @@ table / screenshot) — the repo stays presentable at any moment.
   rollups, tiered retention), `COPY` bulk writer (11.3× batched INSERT), Kafka consumer with
   offset-after-write, Spring Boot query API choosing its own resolution, 100M-row measurement, and
   the QuestDB comparison → ADR-0005.
-- **Phase 4 🚧** — rules engine and alerting. Done: dependency-free `rules` module (threshold,
-  geofence, staleness; hysteresis in the condition, debounce in a four-phase state machine),
-  Kafka Streams topology over changelog-backed stores, all three scenarios end to end, alert
-  latency measured → ADR-0006, rolling windows exposing min/max/mean/stddev/slope as derived
-  metrics so trend rules are ordinary thresholds. Remaining: the webhook/e-mail notifier.
+- **Phase 4 ✅** — rules engine and alerting: dependency-free `rules` module (threshold, geofence,
+  staleness; hysteresis in the condition, debounce in a four-phase state machine with enforced
+  transition coverage), Kafka Streams topology over changelog-backed stores, rolling windows
+  exposing min/max/mean/stddev/slope as derived metrics so trend rules are ordinary thresholds,
+  webhook notifier with bounded retries and jittered backoff. All three scenarios end to end;
+  alert delivery measured at 8.3 ms p50 → ADR-0006. **SMTP delivery is not written** — it is a
+  second `AlertSink` implementation and nothing else depends on it.
 - **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log
 - **Phase 6** — OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind
 - **Phase 7** — React console, demo script, README + GIF
