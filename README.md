@@ -32,7 +32,7 @@ That means every design decision here is answerable from both ends of the link:
 | 1 | Protocol core: MAVLink v1/v2 + HK framing, resync, sequence-loss, differential tests, JMH | ✅ done |
 | 2 | Ingest gateway: Netty, backpressure + load shedding, dedup, Kafka producer | ✅ done |
 | 3 | TimescaleDB schema, continuous aggregates, query API, 100M-row measurement | ✅ done |
-| 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | ⬜ |
+| 4 | Kafka Streams windowing, rules engine with debounce/hysteresis, alert state machine | 🚧 rules engine, state machine, topology and latency measurement done; windowed aggregation and the notifier remain |
 | 5 | Command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log | ⬜ |
 | 6 | OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind | ⬜ |
 | 7 | Live map console, scripted demo, benchmarks write-up | ⬜ |
@@ -60,6 +60,14 @@ Two more corrections worth recording, since both were beliefs the work overturne
 > **The minute rollup was slower than the raw data it summarises** — 70.9 ms p95 against 1.0 ms. The first explanation, real-time aggregation, was wrong: `materialized_only` defaults to *true* on 2.29, and a test asserting otherwise is what killed the hypothesis. The real cause was that **continuous aggregates do not inherit the raw table's indexes** — they are addressed as views but backed by their own hypertables, and TimescaleDB indexes them one column per `GROUP BY` rather than compositely. Migration `V4` adds the composite index: **70.9 ms → 2.3 ms**, and the gain grows with table size, which is the prediction that distinguished the right diagnosis from the wrong one.
 
 > **A timestamp field was never wall clock.** All three ingest handlers were putting `System.nanoTime()` into a field named `receivedAtEpochNanos`. That counts from an arbitrary origin and is meaningful only as a difference — used as a timestamp it produces a number that looks like nanoseconds since 1970 and is not. Nothing had noticed because nothing had yet written it to a `TIMESTAMPTZ` column; rows would have landed around 1970 or 2262 depending on the machine's uptime.
+
+**Phase 4, so far:** telemetry becomes alerts. A dependency-free rules module holds the semantics — threshold, geofence and telemetry-loss conditions, each with hysteresis, over a four-phase state machine that debounces both firing *and* recovery. The transition table is covered by construction: every test records the edge it traverses and the build fails if any row goes untested. A Kafka Streams topology runs it over changelog-backed state so a rebalance does not silently re-arm every pending alert. All three phase-4 scenarios — geofence breach, low battery, telemetry loss — pass end to end, and **an alert reaches a consumer 8.3 ms p50** after the telemetry that caused it.
+
+> **96 % of the alert latency was a batching setting, not work.** The first measurement said 104.5 ms p50. The plain Kafka producer defaults `linger.ms` to 0; Kafka Streams overrides it to 100, and the p50 tracked that setting with a ~4 ms base. Alerts are rare by construction, so batching the alert topic buys nothing — the deployment sets 5 ms, which keeps changelog batching under load and still cuts idle alert latency twelve-fold. Numbers in [`docs/benchmarks.md`](docs/benchmarks.md).
+
+> **Detecting silence needs the clock nobody recommends.** Telemetry loss is a condition on records that did not arrive, so it needs a timer, and Kafka Streams' `STREAM_TIME` — the deterministic, replayable, conventionally-correct choice — advances only with record timestamps. If *all* telemetry stops, stream time stops with it and the platform raises **zero** telemetry-loss alerts at exactly the moment every device has gone quiet. `WALL_CLOCK_TIME` catches that but fires on the whole fleet during any replay. The two are told apart by whether records are arriving *at all*, not by how far behind they are — suppressing on lag alone reintroduces the first bug, and a test is named after that. Reasoning in [ADR-0006](docs/adr/ADR-0006-detecting-silence.md).
+
+> **A second measurement was wrong the way the first one in phase 2 was.** The initial latency run published 200 events at once and reported p95, p99 and max within 0.3 ms of each other — a distribution with no spread, which is a queue draining rather than a latency. It was measuring how long the burst took to empty, with the last event charged for the 199 ahead of it. Different tell from the 850× bug, same lesson: the harness was producing the number.
 
 Three findings from phase 1 are written up rather than quietly fixed, because each one was a belief that measurement or testing overturned:
 

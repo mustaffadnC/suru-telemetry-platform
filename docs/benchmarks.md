@@ -315,6 +315,64 @@ addressed as *views*, so they look like they inherit the underlying table's acce
 not. Each is backed by its own hypertable with its own indexes, and indexing the raw table does
 nothing for them.
 
+## Phase 4 — from telemetry event to alert
+
+Measured 4 Aug 2026, against a real broker in a container and a real `KafkaStreams` instance.
+
+```bash
+./gradlew :stream-processor:test --rerun -Dsuru.alertbench=true --tests '*AlertPipelineIT*'
+```
+
+200 events, one device each, a threshold rule with zero debounce so the first breaching record
+produces an alert. Timed from `producer.send` returning to the alert being readable by a separate
+consumer — the whole path, including both brokers hops and the JSON serde.
+
+| | p50 | p95 | p99 | max |
+|---|---:|---:|---:|---:|
+| `linger.ms` = 100 (Kafka Streams default) | 104.5 ms | 111.1 ms | 115.0 ms | 116.7 ms |
+| `linger.ms` = 5 (**this project's setting**) | 8.3 ms | 11.6 ms | 19.8 ms | 22.8 ms |
+| `linger.ms` = 0 | **4.6 ms** | 15.1 ms | 16.9 ms | 25.2 ms |
+
+### Almost all the default latency was a batching setting
+
+The first run measured 104.5 ms p50 and the number looked like work. It is not: the plain Kafka
+producer defaults `linger.ms` to 0, and **Kafka Streams overrides it to 100**, trading latency for
+batching on every topic it writes. The p50 tracks the setting almost exactly with a ~4 ms base, so
+roughly **96 % of the default alert latency was a record waiting in a send buffer for a batch that
+was never going to fill.**
+
+Alerts are rare by construction — that is what makes them alerts — so batching the alert topic buys
+nothing and costs a tenth of a second per incident.
+
+**Five rather than zero** because the same producer writes the state-store changelogs, which carry a
+record per device update. `linger.ms` only delays a send when the batch has not already filled, so
+under real telemetry load the changelog still batches on `batch.size` and gives up almost nothing;
+idle, alerts arrive twelve times sooner. Zero would buy a further 3.7 ms and give up batching
+altogether.
+
+### The first version of this measurement was wrong, in a familiar way
+
+It published all 200 events in a tight loop and then drained the alert topic, and reported:
+
+```
+p50 154.2 ms   p95 327.6 ms   p99 327.9 ms   max 327.9 ms
+```
+
+That is not a latency distribution. p95, p99 and max sit within 0.3 ms of each other, which is what
+a queue emptying at a constant rate looks like — every event's clock had started at roughly the same
+instant, so the last one was charged for the 199 ahead of it. **What was being measured was how long
+the burst took to drain**, and it would have been published as latency and been wrong by an order of
+magnitude in the pessimistic direction.
+
+This is the same failure as the phase-2 load measurement that was wrong by 850×: in both cases the
+harness, not the system, produced the number. The tell is different and worth keeping — that time it
+was a result implausible against a known component measurement, this time it was a **distribution
+with no spread**. p95 ≈ p99 ≈ max means the samples are not independent.
+
+The fix is a sequential round trip: publish one event, wait for its alert, repeat. That measures what
+the number is supposed to mean — how long after a vehicle reports a fault an operator can see it, on
+an otherwise idle pipeline. Behaviour under load is a throughput question and belongs to phase 6.
+
 ## Planned measurements
 
 | Phase | Question | Method |

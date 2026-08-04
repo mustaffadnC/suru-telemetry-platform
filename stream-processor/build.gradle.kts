@@ -19,5 +19,8 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.bundles.testing)
     testImplementation(libs.kafka.streams.test.utils)
+    testImplementation(platform(libs.testcontainers.bom))
+    testImplementation(libs.testcontainers.core)
+    testImplementation(libs.testcontainers.kafka)
     testRuntimeOnly(libs.junit.platform.launcher)
 }

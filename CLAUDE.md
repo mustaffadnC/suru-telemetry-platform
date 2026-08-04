@@ -257,6 +257,26 @@ pass.**
   1–4 % while the bitwise CRC dominated and 10–17 % after the table CRC replaced it, with nothing
   about the copying changed. Measure again after changing the profile; see
   [docs/benchmarks.md](docs/benchmarks.md).
+- **Continuous aggregates do not inherit the raw hypertable's indexes.** They are addressed as
+  views, which makes it look like they do, but each is backed by its own hypertable and TimescaleDB
+  indexes them one index per `GROUP BY` column, never compositely. A rollup was slower than the raw
+  data it summarised (70.9 ms vs 1.0 ms) until `V4` added `(tenant_id, device_id, metric, bucket
+  DESC)`. Note `materialized_only` defaults to **true** on 2.29 — real-time aggregation is *not*
+  the usual explanation here, and assuming it was cost an hour.
+- **A QuestDB table named `telemetry` collides with the server's own internal one.** The `CREATE` is
+  accepted, `tables()` comes back empty, rows vanish, and the log fills with "could not get table
+  writer". Use a prefixed name.
+- **Kafka Streams overrides `linger.ms` to 100** where the plain producer defaults to 0. On a
+  latency-sensitive topic that setting *is* the latency: alert delivery was 104.5 ms p50 until it
+  was lowered, 8.3 ms at 5 ms, 4.6 ms at 0.
+- **`TopologyTestDriver.advanceWallClockTime` fires each wall-clock punctuator once per call**,
+  however far it moves the clock — advancing 20 s against a 1 s schedule is one tick, not twenty.
+  Verified with a probe rather than assumed. Tests that jump exercise a cadence production never
+  has and hide anything depending on the previous tick.
+- **A latency distribution with no spread is not a latency distribution.** p95 ≈ p99 ≈ max means the
+  samples are not independent — usually a burst published at once and then drained, where the last
+  sample is charged for everything ahead of it. Companion tell to the phase-2 850× bug: both times
+  the harness produced the number.
 - Compose image tags are coarse (`latest`, major tags); **pinned to digests in phase 6**.
 
 ## Phases
@@ -278,7 +298,11 @@ table / screenshot) — the repo stays presentable at any moment.
   rollups, tiered retention), `COPY` bulk writer (11.3× batched INSERT), Kafka consumer with
   offset-after-write, Spring Boot query API choosing its own resolution, 100M-row measurement, and
   the QuestDB comparison → ADR-0005.
-- **Phase 4** — Kafka Streams windowing, rules engine (debounce/hysteresis), alert state machine
+- **Phase 4 🚧** — rules engine and alerting. Done: dependency-free `rules` module (threshold,
+  geofence, staleness; hysteresis in the condition, debounce in a four-phase state machine),
+  Kafka Streams topology over changelog-backed stores, all three scenarios end to end, alert
+  latency measured → ADR-0006. Remaining: windowed aggregation (min/max/avg/stddev), rate-of-change
+  conditions, and the webhook/e-mail notifier.
 - **Phase 5** — command path (outbox, ACK matching), Keycloak, multi-tenancy, audit log
 - **Phase 6** — OpenTelemetry, load tests, GC comparison, chaos tests, Helm/kind
 - **Phase 7** — React console, demo script, README + GIF
