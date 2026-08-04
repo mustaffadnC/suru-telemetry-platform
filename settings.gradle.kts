@@ -21,10 +21,11 @@ dependencyResolutionManagement {
 //   Phase 1 → protocol
 //   Phase 2 → ingest-gateway
 //   Phase 3 → control-plane
-//   Phase 4 → stream-processor
+//   Phase 4 → rules, stream-processor
 //   Phase 6 → archiver
 include("protocol")
 include("ingest-gateway")
 include("storage")
 include("control-plane")
+include("rules")
 include("benchmarks")
