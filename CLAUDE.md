@@ -249,6 +249,11 @@ pass.**
 - **A false `HK\x01` header does not merely desynchronise — it parses.** The following frame's own
   magic supplies a plausible type and length, so a frame-shaped span is read and only the checksum
   rejects it. Concrete reason recovery advances one byte.
+- **MAVLink v2 truncation stops at one byte, never zero.** "Trailing zeros are truncated" reads as
+  "remove them all"; it is not. In the 1058-frame SITL recording **no** frame has `len=0` and eight
+  carry a single zero byte — a VFR_HUD whose payload truncates to nothing is still sent as `len=1`.
+  A round trip through this repo's own decoder cannot catch this, because it reconstructs the zeros
+  either way. Only the real bytes disagree.
 - **Any bytecode-reading tool must support class file major version 69 (Java 25).** ArchUnit 1.4.0
   bundled an ASM that could not: the importer silently skipped *every* class and each rule failed
   with "failed to check any classes" — which reads like a rule violation but means the parser read
