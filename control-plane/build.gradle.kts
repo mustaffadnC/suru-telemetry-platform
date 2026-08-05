@@ -8,6 +8,11 @@ description = "Query and operator API over the telemetry store."
 
 dependencies {
     implementation(project(":storage"))
+    // For the Kafka header names the gateway writes and the MAVLink command codecs. The control
+    // plane reads what the gateway produced; sharing the constants beats agreeing on strings.
+    implementation(project(":ingest-gateway"))
+    implementation(project(":protocol"))
+    implementation(libs.kafka.clients)
 
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
